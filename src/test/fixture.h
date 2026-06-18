@@ -16,3 +16,4 @@ TestResult RunHtmlTests();
 TestResult RunCssTests();
 TestResult RunLayoutTests();
 TestResult RunPaintTests();
+TestResult RunJsTests();

@@ -4,6 +4,43 @@
 #include <cctype>
 #include <map>
 
+// ─── length parsing ──────────────────────────────────────────────────────────
+
+// Parse a CSS length into pixels.  Returns -1 for inherit/auto/none/unknown.
+static float ParseLength(const std::string& raw) {
+    std::string s = raw;
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && std::isspace((unsigned char)s.back()))  s.pop_back();
+    if (s.empty()) return -1;
+    std::string low;
+    for (char c : s) low += (char)std::tolower((unsigned char)c);
+    if (low == "inherit" || low == "initial" || low == "unset" || low == "normal") return -1;
+    if (low == "none" || low == "auto") return -1;
+    if (low == "0") return 0;
+    // parse numeric part
+    size_t i = 0;
+    if (!s.empty() && (s[0] == '-' || s[0] == '+')) i++;
+    size_t numStart = i;
+    bool dot = false;
+    while (i < s.size() && (std::isdigit((unsigned char)s[i]) || (s[i] == '.' && !dot))) {
+        if (s[i] == '.') dot = true;
+        i++;
+    }
+    if (i == numStart) return 0;
+    float num = 0;
+    try { num = std::stof(s.substr(0, i)); } catch (...) { return 0; }
+    std::string unit = low.substr(i);
+    while (!unit.empty() && unit[0] == ' ') unit.erase(unit.begin());
+    if (unit.empty() || unit == "px") return num;
+    if (unit == "em" || unit == "rem") return num * 16.f;  // approx: 1em ≈ 16px
+    if (unit == "pt")  return num * 1.333f;
+    if (unit == "pc")  return num * 16.f;
+    if (unit == "ex" || unit == "ch") return num * 8.f;
+    if (unit == "%")   return num * 0.16f;  // rough: 100% ≈ 16px base
+    if (unit == "vw" || unit == "vh") return num * 8.f; // rough viewport
+    return num;  // unrecognized unit, treat as px
+}
+
 // ─── string helpers ──────────────────────────────────────────────────────────
 
 static std::string sLower(std::string s) {
@@ -115,32 +152,216 @@ static void ApplyDeclaration(const std::string& prop,
                              ComputedStyle& out) {
     if (prop == "color") {
         out.color = ParseCssColor(val);
-    } else if (prop == "background-color" || prop == "background") {
+    } else if (prop == "background-color") {
         out.bgColor = ParseCssColor(val);
+    } else if (prop == "background") {
+        // background shorthand: try as color first, then look for url()
+        std::string low = sLower(val);
+        if (low.find("url(") != std::string::npos) {
+            size_t us = low.find("url("), ue = val.find(')', us + 4);
+            if (ue != std::string::npos) {
+                std::string url = sTrim(val.substr(us + 4, ue - us - 4));
+                out.backgroundImage = stripQuotes(url);
+            }
+        } else {
+            CssColor c = ParseCssColor(val);
+            if (c.valid) out.bgColor = c;
+        }
+    } else if (prop == "background-image") {
+        std::string low = sLower(val);
+        if (low.find("url(") != std::string::npos) {
+            size_t us = low.find("url("), ue = val.find(')', us + 4);
+            if (ue != std::string::npos) {
+                std::string url = sTrim(val.substr(us + 4, ue - us - 4));
+                out.backgroundImage = stripQuotes(url);
+            }
+        }
     } else if (prop == "font-size") {
-        std::string v = sLower(val);
+        std::string v = sLower(sTrim(val));
         if      (v == "small")    out.fontSize = 12;
         else if (v == "medium")   out.fontSize = 15;
         else if (v == "large")    out.fontSize = 18;
         else if (v == "x-large")  out.fontSize = 22;
         else if (v == "xx-large") out.fontSize = 28;
-        else try { out.fontSize = std::stof(v); } catch (...) {}
+        else if (v == "smaller")  out.fontSize = 12;
+        else if (v == "larger")   out.fontSize = 18;
+        else { float f = ParseLength(val); if (f > 0) out.fontSize = f; }
     } else if (prop == "font-weight") {
         std::string v = sLower(val);
         out.boldSet = true;
-        out.bold = (v == "bold" || v == "700" || v == "800" || v == "900");
+        int w = 0; try { w = std::stoi(v); } catch (...) {}
+        out.bold = (v == "bold" || v == "bolder" || w >= 600);
     } else if (prop == "font-style") {
         out.italicSet = true;
         out.italic = (sLower(val) == "italic" || sLower(val) == "oblique");
+    } else if (prop == "font-family") {
+        std::string v = val;
+        size_t comma = v.find(',');
+        if (comma != std::string::npos) v = v.substr(0, comma);
+        v = stripQuotes(sTrim(v));
+        std::string low = sLower(v);
+        if      (low == "sans-serif")                           v = "Segoe UI";
+        else if (low == "serif")                                v = "Georgia";
+        else if (low == "monospace" || low == "courier"
+              || low == "courier new")                          v = "Consolas";
+        else if (low == "helvetica" || low == "arial")          v = "Arial";
+        else if (low == "times" || low == "times new roman")    v = "Times New Roman";
+        else if (low == "system-ui" || low == "ui-sans-serif")  v = "Segoe UI";
+        out.fontFamily = v;
+    } else if (prop == "font") {
+        // simplified font shorthand: extract weight, style, size, family
+        std::istringstream vs(val); std::string tok;
+        while (vs >> tok) {
+            std::string low = sLower(tok);
+            if (low == "bold" || low == "bolder") { out.bold = true; out.boldSet = true; }
+            else if (low == "italic" || low == "oblique") { out.italic = true; out.italicSet = true; }
+            else if (low == "normal") { /* no-op */ }
+            else {
+                // Check for size (maybe size/lineheight)
+                size_t slash = low.find('/');
+                std::string sizePart = (slash != std::string::npos) ? low.substr(0, slash) : low;
+                float sz = ParseLength(sizePart);
+                if (sz > 0) {
+                    out.fontSize = sz;
+                    if (slash != std::string::npos) {
+                        float lh = 0;
+                        try { lh = std::stof(low.substr(slash + 1)); } catch (...) {}
+                        if (lh > 0) out.lineHeight = lh * sz;
+                    }
+                    // rest of string is font family
+                    std::string rest;
+                    while (vs >> tok) { if (!rest.empty()) rest += " "; rest += tok; }
+                    if (!rest.empty()) {
+                        ComputedStyle tmp; ApplyDeclaration("font-family", rest, tmp);
+                        out.fontFamily = tmp.fontFamily;
+                    }
+                    break;
+                }
+            }
+        }
     } else if (prop == "text-decoration" || prop == "text-decoration-line") {
         out.underline = (sLower(val).find("underline") != std::string::npos);
+    } else if (prop == "text-transform") {
+        std::string v = sLower(val);
+        out.textTransformSet = true;
+        if      (v == "uppercase")  out.textTransform = 1;
+        else if (v == "lowercase")  out.textTransform = 2;
+        else if (v == "capitalize") out.textTransform = 3;
+        else                        out.textTransform = 0;
+    } else if (prop == "white-space") {
+        std::string v = sLower(val);
+        out.whiteSpaceSet = true;
+        out.whiteSpaceNowrap = (v == "nowrap" || v == "pre-line");
     } else if (prop == "display") {
-        out.displayNone = (sLower(val) == "none");
-    } else if (prop == "margin" || prop == "margin-top") {
-        try { out.marginTop = std::stof(val); } catch (...) {}
-        if (prop == "margin") try { out.marginBottom = std::stof(val); } catch (...) {}
+        std::string v = sLower(val);
+        out.displayNone = (v == "none");
+        out.displayFlex = (v == "flex" || v == "inline-flex" || v == "grid" || v == "inline-grid");
+    } else if (prop == "margin") {
+        std::istringstream vs(val); std::vector<float> v;
+        std::string tok;
+        while (vs >> tok) {
+            if (sLower(tok) == "auto") v.push_back(-2.f);
+            else { float f = ParseLength(tok); v.push_back(f < 0 ? 0 : f); }
+        }
+        if (v.size() == 1) {
+            out.marginTop = out.marginRight = out.marginBottom = out.marginLeft = v[0];
+        } else if (v.size() == 2) {
+            out.marginTop = out.marginBottom = v[0];
+            out.marginRight = out.marginLeft = v[1];
+        } else if (v.size() == 3) {
+            out.marginTop = v[0]; out.marginRight = out.marginLeft = v[1]; out.marginBottom = v[2];
+        } else if (v.size() >= 4) {
+            out.marginTop = v[0]; out.marginRight = v[1]; out.marginBottom = v[2]; out.marginLeft = v[3];
+        }
+    } else if (prop == "margin-top") {
+        if (sLower(val) == "auto") out.marginTop = -2.f;
+        else { float f = ParseLength(val); if (f >= 0) out.marginTop = f; }
     } else if (prop == "margin-bottom") {
-        try { out.marginBottom = std::stof(val); } catch (...) {}
+        if (sLower(val) == "auto") out.marginBottom = -2.f;
+        else { float f = ParseLength(val); if (f >= 0) out.marginBottom = f; }
+    } else if (prop == "margin-right") {
+        if (sLower(val) == "auto") out.marginRight = -2.f;
+        else { float f = ParseLength(val); if (f >= 0) out.marginRight = f; }
+    } else if (prop == "margin-left") {
+        if (sLower(val) == "auto") out.marginLeft = -2.f;
+        else { float f = ParseLength(val); if (f >= 0) out.marginLeft = f; }
+
+    } else if (prop == "padding") {
+        std::istringstream vs(val); std::vector<float> v;
+        std::string tok;
+        while (vs >> tok) { float f = ParseLength(tok); v.push_back(f < 0 ? 0 : f); }
+        if (v.size() == 1) {
+            out.paddingTop = out.paddingRight = out.paddingBottom = out.paddingLeft = v[0];
+        } else if (v.size() == 2) {
+            out.paddingTop = out.paddingBottom = v[0];
+            out.paddingRight = out.paddingLeft = v[1];
+        } else if (v.size() == 3) {
+            out.paddingTop = v[0]; out.paddingRight = out.paddingLeft = v[1]; out.paddingBottom = v[2];
+        } else if (v.size() >= 4) {
+            out.paddingTop = v[0]; out.paddingRight = v[1]; out.paddingBottom = v[2]; out.paddingLeft = v[3];
+        }
+    } else if (prop == "padding-top") {
+        float f = ParseLength(val); if (f >= 0) out.paddingTop    = f;
+    } else if (prop == "padding-right") {
+        float f = ParseLength(val); if (f >= 0) out.paddingRight  = f;
+    } else if (prop == "padding-bottom") {
+        float f = ParseLength(val); if (f >= 0) out.paddingBottom = f;
+    } else if (prop == "padding-left") {
+        float f = ParseLength(val); if (f >= 0) out.paddingLeft   = f;
+
+    } else if (prop == "border-width") {
+        float f = ParseLength(val); if (f >= 0) out.borderWidth = f;
+    } else if (prop == "border-color") {
+        out.borderColor = ParseCssColor(val);
+    } else if (prop == "border-radius") {
+        float f = ParseLength(val); if (f >= 0) out.borderRadius = f;
+    } else if (prop == "border") {
+        if (sLower(val) == "none" || sLower(val) == "0") { out.borderWidth = 0; }
+        else {
+            std::istringstream vs(val); std::string tok;
+            while (vs >> tok) {
+                float f = ParseLength(tok);
+                if (f > 0) { out.borderWidth = f; }
+                else if (tok != "solid" && tok != "dashed" && tok != "dotted" && tok != "none") {
+                    CssColor c = ParseCssColor(tok);
+                    if (c.valid) out.borderColor = c;
+                }
+            }
+        }
+    } else if (prop == "border-top" || prop == "border-bottom"
+            || prop == "border-left" || prop == "border-right"
+            || prop == "border-top-width" || prop == "border-bottom-width"
+            || prop == "border-left-width" || prop == "border-right-width") {
+        std::istringstream vs(val); std::string tok;
+        while (vs >> tok) { float f = ParseLength(tok); if (f >= 0) { out.borderWidth = f; break; } }
+
+    } else if (prop == "line-height") {
+        std::string v = sLower(sTrim(val));
+        if (v == "normal") out.lineHeight = 0;
+        else {
+            // Could be unitless multiplier like "1.5" or "1.5em"
+            float f = ParseLength(val);
+            if (f > 0) out.lineHeight = f;
+            else { try { float n = std::stof(val); if (n > 0) out.lineHeight = n * 16.f; } catch (...) {} }
+        }
+    } else if (prop == "width") {
+        float f = ParseLength(val); if (f >= 0) out.width = f;
+    } else if (prop == "height") {
+        float f = ParseLength(val); if (f >= 0) out.height = f;
+    } else if (prop == "max-width") {
+        float f = ParseLength(val); if (f >= 0) out.maxWidth = f;
+    } else if (prop == "min-width") {
+        float f = ParseLength(val); if (f >= 0) out.minWidth = f;
+    } else if (prop == "min-height") {
+        float f = ParseLength(val); if (f >= 0) out.minHeight = f;
+    } else if (prop == "text-align") {
+        std::string v = sLower(sTrim(val));
+        out.textAlignSet = true;
+        if      (v == "center") out.textAlign = 1;
+        else if (v == "right")  out.textAlign = 2;
+        else                    out.textAlign = 0;
+    } else if (prop == "opacity") {
+        // not stored separately — could multiply into color alpha
     }
 }
 
@@ -436,8 +657,22 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.italicSet) out << "italic=" << BoolText(style.italic) << " ";
     if (style.underline) out << "underline=true ";
     if (style.displayNone) out << "display=none ";
-    if (style.marginTop >= 0) out << "marginTop=" << style.marginTop << " ";
+    if (style.marginTop    >= 0) out << "marginTop="    << style.marginTop    << " ";
+    if (style.marginRight  >= 0) out << "marginRight="  << style.marginRight  << " ";
     if (style.marginBottom >= 0) out << "marginBottom=" << style.marginBottom << " ";
+    if (style.marginLeft   >= 0) out << "marginLeft="   << style.marginLeft   << " ";
+    if (style.paddingTop   >= 0) out << "paddingTop="   << style.paddingTop   << " ";
+    if (style.paddingRight >= 0) out << "paddingRight=" << style.paddingRight << " ";
+    if (style.paddingBottom>= 0) out << "paddingBottom="<< style.paddingBottom<< " ";
+    if (style.paddingLeft  >= 0) out << "paddingLeft="  << style.paddingLeft  << " ";
+    if (style.borderWidth  >= 0) out << "borderWidth="  << style.borderWidth  << " ";
+    if (style.borderColor.valid) AppendColor(out, "borderColor", style.borderColor);
+    if (style.borderRadius > 0)  out << "borderRadius=" << style.borderRadius << " ";
+    if (style.lineHeight   > 0)  out << "lineHeight="   << style.lineHeight   << " ";
+    if (style.textAlignSet)      out << "textAlign="    << style.textAlign    << " ";
+    if (style.width        >= 0) out << "width="        << style.width        << " ";
+    if (style.height       >= 0) out << "height="       << style.height       << " ";
+    if (style.maxWidth     >= 0) out << "maxWidth="     << style.maxWidth     << " ";
     out << "\n";
     return out.str();
 }

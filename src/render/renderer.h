@@ -16,6 +16,12 @@ struct HitRegion {
     std::string href;
 };
 
+struct TabEntry {
+    std::wstring title;
+    bool         active  = false;
+    bool         loading = false;
+};
+
 class Renderer {
 public:
     ~Renderer();
@@ -23,15 +29,19 @@ public:
     bool Init(HWND hwnd);
     void Resize(UINT width, UINT height);
 
-    // Returns total document height.
+    // Paint everything. Returns total document height (for scrollbar).
     float Paint(const std::shared_ptr<Node>& doc,
                 float scrollY,
                 const std::string& baseUrl,
-                float topInset = 0.f);
+                float topInset   = 0.f,
+                float tabStripH  = 0.f,
+                const std::vector<TabEntry>* tabs = nullptr);
 
     std::string HitTest(float x, float y) const;
-    void DiscardTarget();
+    int  HitTestTab(float x, float y) const;
+    bool HitTestTabClose(float x, float y, int& outIdx) const;
 
+    void DiscardTarget();
     void ReceiveImage(const std::string& url, const std::vector<uint8_t>& bytes);
 
     void SetImageRequestCallback(std::function<void(std::string)> cb) {
@@ -41,17 +51,31 @@ public:
     void  SetZoom(float z);
     float GetZoom() const { return m_zoom; }
 
+    void SetSearchQuery(const std::wstring& q) { m_searchQuery = q; }
+    const std::wstring& GetSearchQuery() const { return m_searchQuery; }
+
 private:
+    // ── D2D / DWrite / WIC ────────────────────────────────────────────────
     ID2D1Factory*           m_factory   = nullptr;
     ID2D1HwndRenderTarget*  m_rt        = nullptr;
     IDWriteFactory*         m_dwrite    = nullptr;
     IWICImagingFactory*     m_wic       = nullptr;
 
-    ID2D1SolidColorBrush*   m_textBrush = nullptr;
-    ID2D1SolidColorBrush*   m_linkBrush = nullptr;
-    ID2D1SolidColorBrush*   m_bgBrush   = nullptr;
-    ID2D1SolidColorBrush*   m_hrBrush   = nullptr;
+    // ── persistent brushes ────────────────────────────────────────────────
+    ID2D1SolidColorBrush*   m_textBrush  = nullptr;
+    ID2D1SolidColorBrush*   m_linkBrush  = nullptr;
+    ID2D1SolidColorBrush*   m_bgBrush    = nullptr;
+    ID2D1SolidColorBrush*   m_hrBrush    = nullptr;
+    ID2D1SolidColorBrush*   m_codeBgBrush= nullptr;  // code block bg (#f4f4f4)
+    ID2D1SolidColorBrush*   m_findBrush  = nullptr;  // search highlight (#fff176)
+    ID2D1SolidColorBrush*   m_quoteBrush = nullptr;  // blockquote bar (#ccc)
+    ID2D1SolidColorBrush*   m_tabBgBrush = nullptr;
+    ID2D1SolidColorBrush*   m_tabActBrush= nullptr;
+    ID2D1SolidColorBrush*   m_tabInaBrush= nullptr;
+    ID2D1SolidColorBrush*   m_tabTxtBrush= nullptr;
+    ID2D1SolidColorBrush*   m_tabClsBrush= nullptr;
 
+    // ── text formats (zoom-scaled) ────────────────────────────────────────
     IDWriteTextFormat*      m_fmtBody   = nullptr;
     IDWriteTextFormat*      m_fmtBold   = nullptr;
     IDWriteTextFormat*      m_fmtItalic = nullptr;
@@ -59,14 +83,16 @@ private:
     IDWriteTextFormat*      m_fmtH1     = nullptr;
     IDWriteTextFormat*      m_fmtH2     = nullptr;
     IDWriteTextFormat*      m_fmtH3     = nullptr;
+    IDWriteTextFormat*      m_fmtTab    = nullptr;   // tab titles (not zoom-scaled)
 
     float m_zoom = 1.f;
+
+    std::wstring m_searchQuery;
 
     std::map<std::string, ID2D1Bitmap*> m_images;
     std::set<std::string>               m_loadingImages;
     std::function<void(std::string)>    m_imageRequestCb;
 
-    // Per-Paint temporary resources; released at end of Paint
     std::vector<ID2D1SolidColorBrush*>  m_tempBrushes;
     std::vector<IDWriteTextFormat*>     m_tempFormats;
 
@@ -76,14 +102,23 @@ private:
 
     std::vector<HitRegion> m_hits;
 
+    struct TabHit { float x, y, w, h; int idx; bool isClose; };
+    std::vector<TabHit> m_tabHits;
+
+    // ── internal helpers ──────────────────────────────────────────────────
     bool EnsureTarget();
     void ReleaseTarget();
     void ReleaseBrushes();
     bool CreateBrushes();
     void RecreateFormats();
+    void CreateTabFont();
 
+    void DrawTabStrip(const std::vector<TabEntry>& tabs, float h);
+
+    // ── paint context ─────────────────────────────────────────────────────
     struct PaintCtx {
         float y            = 0;
+        float x            = 32.f;
         float contentW     = 700;
         float scrollY      = 0;
         float winH         = 600;
@@ -92,17 +127,26 @@ private:
         bool  italic       = false;
         bool  isLink       = false;
         bool  isCode       = false;
+        bool  dryRun       = false;
+        int   textAlign    = 0;       // 0=left, 1=center, 2=right
+        int   textTransform= 0;       // 0=none, 1=upper, 2=lower, 3=cap
+        bool  whiteSpaceNowrap = false;
+        int   listStyle    = 0;       // 0=none, 1=unordered, 2=ordered
+        int   listCounter  = 0;
+        std::string fontFamily;
         std::string linkHref;
         int   headingLevel = 0;
         std::string baseUrl;
         ID2D1SolidColorBrush* colorOverride = nullptr;
         IDWriteTextFormat*    fmtOverride   = nullptr;
         const Stylesheet*     sheet         = nullptr;
+        float lineHeightMul = 1.45f;
     };
 
     float WalkNode(const Node* node, PaintCtx& ctx);
     IDWriteTextFormat* FormatFor(const PaintCtx& ctx) const;
 
+    // Returns new y after drawing (or dry-run computing) wrapped text.
     float DrawWrappedText(const std::wstring& text,
                           float x, float y, float maxW,
                           IDWriteTextFormat* fmt,
@@ -110,13 +154,22 @@ private:
                           bool underline,
                           const std::string& href,
                           float scrollY,
-                          float topInset);
+                          float topInset,
+                          float lineHeightMul = 1.45f,
+                          int   textAlign     = 0,
+                          bool  dryRun        = false,
+                          bool  nowrap        = false);
+
+    // Draw a preformatted block (pre element), returns new y.
+    float DrawPreBlock(const Node* node, PaintCtx& ctx);
 
     ID2D1SolidColorBrush* TempBrush(D2D1_COLOR_F color);
-    IDWriteTextFormat*    TempFormat(float size, bool bold, bool mono, bool italic);
+    IDWriteTextFormat*    TempFormat(float size, bool bold, bool mono, bool italic,
+                                     const std::string& family = "");
 
     std::wstring ToWide(const std::string& s);
     std::string  ResolveUrl(const std::string& href, const std::string& base);
 
     static Stylesheet CollectStylesheet(const Node* root);
+    static CssColor   FindBodyBgColor(const Node* root, const Stylesheet& sheet);
 };

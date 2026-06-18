@@ -1,0 +1,130 @@
+#pragma once
+#include "js/value.h"
+#include "js/gc.h"
+#include "js/compiler.h"
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <functional>
+#include <memory>
+
+// ── CallFrame ─────────────────────────────────────────────────────────────────
+struct CallFrame {
+    BytecodeFunction*   fn       = nullptr;
+    int                 pc       = 0;         // index into fn->code
+    int                 regBase  = 0;         // base index into m_stack
+    JsValue             thisVal;
+    std::vector<Upvalue*> upvalues; // upvalues for this frame's closure
+    bool                isCtor   = false;
+};
+
+// ── VM ────────────────────────────────────────────────────────────────────────
+class VM {
+public:
+    explicit VM(GC& gc);
+    ~VM() = default;
+
+    // Load a compiled program and execute it.
+    JsValue execute(BytecodeFunction* fn, JsValue thisVal = JsValue::undefined());
+
+    // Call a JS function with given this and args.
+    JsValue call(JsValue fn, JsValue thisVal, std::vector<JsValue> args);
+    JsValue callNew(JsValue ctor, std::vector<JsValue> args);
+
+    // Access the global object.
+    JsObject* globals() { return m_globals; }
+
+    // Set a global variable.
+    void setGlobal(const std::string& name, JsValue val);
+    JsValue getGlobal(const std::string& name);
+
+    // GC access for built-ins.
+    GC& gc() { return m_gc; }
+
+    // String interning helpers.
+    JsValue str(const std::string& s)  { return JsValue::string(m_gc.internString(s)); }
+    JsValue str(std::string&& s)       { return JsValue::string(m_gc.internString(std::move(s))); }
+
+    // Create JS error.
+    JsValue makeError(const std::string& type, const std::string& msg);
+    JsValue makeTypeError(const std::string& msg)     { return makeError("TypeError", msg); }
+    JsValue makeRangeError(const std::string& msg)    { return makeError("RangeError", msg); }
+    JsValue makeReferenceError(const std::string& msg){ return makeError("ReferenceError", msg); }
+
+    // Throw a JS error from native code.
+    [[noreturn]] void throwError(const std::string& type, const std::string& msg) {
+        throw JsException(makeError(type, msg));
+    }
+    [[noreturn]] void throwTypeError(const std::string& msg)  { throwError("TypeError",  msg); }
+    [[noreturn]] void throwRangeError(const std::string& msg) { throwError("RangeError", msg); }
+
+    // Async/Promise support.
+    JsValue promiseResolve(JsValue val);
+    JsValue promiseReject(JsValue reason);
+    void    promiseThen(JsObject* p, JsValue onFulfilled, JsValue onRejected);
+    void    resolvePromise(JsObject* p, JsValue val);
+    void    rejectPromise(JsObject* p, JsValue reason);
+
+    // Microtask queue (Promise .then callbacks).
+    struct Microtask { JsValue fn; JsValue arg; };
+    void     enqueueMicrotask(JsValue fn, JsValue arg);
+    void     drainMicrotasks();
+
+    // Macrotask queue (setTimeout callbacks).
+    struct Macrotask { JsValue fn; std::vector<JsValue> args; int delay; };
+    std::vector<Macrotask>& macrotasks() { return m_macrotasks; }
+
+    // DOM dirty flag (set when JS modifies the DOM).
+    bool domDirty = false;
+
+    // Callback to request animation frame / repaint.
+    std::function<void()> onDomDirty;
+
+private:
+    GC&      m_gc;
+    JsObject* m_globals;
+
+    // Value stack: all frames' registers live here.
+    std::vector<JsValue> m_stack;
+    // Call stack
+    std::vector<CallFrame> m_frames;
+
+    // Open upvalue list (linked by stackSlot).
+    std::vector<Upvalue*> m_openUpvalues;
+
+    std::vector<Microtask> m_microtasks;
+    std::vector<Macrotask> m_macrotasks;
+
+    // Per-function constant string cache (const idx → JsString*).
+    std::unordered_map<std::string, JsString*> m_stringCache;
+
+    // Main execution loop for one frame.
+    JsValue runFrame(CallFrame& frame);
+
+    // Set up a new call frame and run it.
+    JsValue callFunction(JsObject* fn, JsValue thisVal, std::vector<JsValue>& args, bool isCtor);
+    JsValue callBytecode(BytecodeFunction* bc, JsValue thisVal,
+                         std::vector<JsValue>& args, bool isCtor,
+                         std::vector<Upvalue*>& closureUpvals);
+
+    // Resolve a constant: handle string constants that need interning.
+    JsValue resolveConst(BytecodeFunction* fn, uint16_t idx);
+
+    // Property operations.
+    JsValue  getProp(JsValue obj, const std::string& key);
+    JsValue  getProp(JsValue obj, JsValue key);
+    void     setProp(JsValue obj, const std::string& key, JsValue val);
+    void     setProp(JsValue obj, JsValue key, JsValue val);
+
+    // Arithmetic helpers.
+    JsValue  add(JsValue a, JsValue b);
+    JsValue  compare(JsValue a, JsValue b, const char* op);
+
+    // Upvalue management.
+    Upvalue* captureUpvalue(JsValue* slot);
+    void     closeUpvalues(JsValue* minSlot);
+
+    // Iterator protocol.
+    JsObject* getIterator(JsValue val);
+    JsValue   iteratorNext(JsObject* iter);
+};

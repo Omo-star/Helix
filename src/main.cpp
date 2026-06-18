@@ -5,6 +5,7 @@
 #include "network/fetcher.h"
 #include "html/parser.h"
 #include "render/renderer.h"
+#include "js/engine.h"
 
 #include <string>
 #include <thread>
@@ -14,11 +15,12 @@
 #include <algorithm>
 
 // ─── control IDs ─────────────────────────────────────────────────────────────
-enum : int { IDC_BACK = 101, IDC_FWRD, IDC_REFR, IDC_STOP, IDC_HOME, IDC_URL };
+enum : int { IDC_BACK = 101, IDC_FWRD, IDC_REFR, IDC_STOP, IDC_HOME, IDC_URL, IDC_FIND };
 
-// ─── custom window messages ───────────────────────────────────────────────────
+// ─── custom messages ──────────────────────────────────────────────────────────
 constexpr UINT WM_PAGE_READY  = WM_USER + 1;
 constexpr UINT WM_IMAGE_READY = WM_USER + 2;
+constexpr UINT WM_NEWTAB_NAVIGATE = WM_USER + 3;  // wParam=tabIdx, lParam=Page*
 
 // ─── data types ──────────────────────────────────────────────────────────────
 struct Page {
@@ -32,27 +34,48 @@ struct ImageMsg {
     std::vector<uint8_t> bytes;
 };
 
+struct PageMsg {
+    int   tabIdx;
+    Page* page;
+};
+
+struct Tab {
+    std::string           url      = "helix://home";
+    std::string           title    = "Helix";
+    std::shared_ptr<Page> page;
+    float                 scrollY  = 0.f;
+    float                 docHeight= 600.f;
+    bool                  loading  = false;
+    std::vector<std::string> history;
+    int                   histIdx  = -1;
+};
+
 // ─── globals ─────────────────────────────────────────────────────────────────
 static HWND     g_hwnd;
 static HWND     g_hwndBack, g_hwndFwrd, g_hwndRefr, g_hwndStop, g_hwndHome, g_hwndUrl;
 static HWND     g_hwndStatus;
+static HWND     g_hwndFind;
+static bool     g_findVisible = false;
 static Renderer g_renderer;
-static float    g_scrollY   = 0.f;
-static float    g_docHeight = 600.f;
+static JsEngine g_js;
 
-static std::shared_ptr<Page> g_page;
-static std::vector<std::string> g_history;
-static int      g_histIdx = -1;
+static std::vector<Tab> g_tabs;
+static int      g_activeTab = 0;
 
-static std::atomic<bool> g_loading{ false };
 static HCURSOR  g_cursorArrow, g_cursorHand;
 
 // ─── layout constants ─────────────────────────────────────────────────────────
-constexpr int TOOLBAR_H = 44;
+constexpr int TAB_H     = 36;   // tab strip height
+constexpr int TOOLBAR_H = 44;   // toolbar (buttons + URL bar)
 constexpr int STATUS_H  = 22;
+constexpr int FIND_H    = 34;   // find bar height
+constexpr int TOP_INSET = TAB_H + TOOLBAR_H;  // total above content
 constexpr int BTN_W     = 38;
 constexpr int BTN_H     = 28;
 constexpr int MARGIN    =  6;
+
+// ─── active tab helpers ───────────────────────────────────────────────────────
+static Tab& CurTab() { return g_tabs[g_activeTab]; }
 
 // ─── string helpers ───────────────────────────────────────────────────────────
 static std::wstring ToWide(const std::string& s) {
@@ -75,27 +98,29 @@ static void SetUrlBar(const std::string& url) {
 static void SetStatus(const std::string& s) {
     SetWindowTextW(g_hwndStatus, ToWide(s).c_str());
 }
-static void SetTitle(const std::wstring& t) {
+static void UpdateTitle() {
+    std::wstring t = ToWide(CurTab().title);
+    if (t.empty()) t = L"New Tab";
     SetWindowTextW(g_hwnd, (t + L" — Helix").c_str());
 }
 
 // ─── scrollbar ───────────────────────────────────────────────────────────────
 static int ViewportH() {
     RECT rc; GetClientRect(g_hwnd, &rc);
-    return rc.bottom - rc.top - TOOLBAR_H - STATUS_H;
+    return rc.bottom - rc.top - TOP_INSET - STATUS_H;
 }
 static void UpdateScrollbar() {
     SCROLLINFO si = { sizeof(si) };
     si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
     si.nMin  = 0;
-    si.nMax  = (int)g_docHeight;
+    si.nMax  = (int)CurTab().docHeight;
     si.nPage = (UINT)std::max(0, ViewportH());
-    si.nPos  = (int)g_scrollY;
+    si.nPos  = (int)CurTab().scrollY;
     SetScrollInfo(g_hwnd, SB_VERT, &si, TRUE);
 }
 static void ClampScroll() {
-    float maxY = std::max(0.f, g_docHeight - (float)ViewportH());
-    g_scrollY  = std::max(0.f, std::min(g_scrollY, maxY));
+    float maxY = std::max(0.f, CurTab().docHeight - (float)ViewportH());
+    CurTab().scrollY = std::max(0.f, std::min(CurTab().scrollY, maxY));
 }
 
 // ─── built-in home page ───────────────────────────────────────────────────────
@@ -104,92 +129,133 @@ static const std::string kHomeHtml = R"html(<!DOCTYPE html>
 <head><title>Helix</title></head>
 <body>
 <h1>Helix</h1>
-<p>Your browser. Type a URL above and press <strong>Enter</strong>.</p>
+<p>Your browser. Built from scratch in C++. No Chromium. No WebView. Everything is yours.</p>
 <hr>
 <h3>Keyboard shortcuts</h3>
 <p><strong>Ctrl+L</strong> &mdash; focus address bar</p>
+<p><strong>Ctrl+T</strong> &mdash; new tab</p>
+<p><strong>Ctrl+W</strong> &mdash; close tab</p>
+<p><strong>Ctrl+Tab</strong> &mdash; next tab</p>
+<p><strong>Ctrl+1&ndash;9</strong> &mdash; switch to tab</p>
 <p><strong>F5 / Ctrl+R</strong> &mdash; reload</p>
 <p><strong>Alt+Left / Alt+Right</strong> &mdash; back / forward</p>
 <p><strong>Ctrl+H</strong> &mdash; history</p>
 <p><strong>Ctrl+= / Ctrl+-</strong> &mdash; zoom in / out</p>
 <p><strong>Ctrl+0</strong> &mdash; reset zoom</p>
-<p><strong>Escape</strong> &mdash; stop loading</p>
+<p><strong>Ctrl+F</strong> &mdash; find in page</p>
+<p><strong>Escape</strong> &mdash; stop loading / close find bar</p>
 <hr>
-<h3>About</h3>
-<p>Helix is a hand-built C++ browser. It has its own HTML tokenizer,
-DOM builder, CSS cascade engine, layout engine, Direct2D renderer, and
-image loader. No Chromium. No WebView. Everything is yours.</p>
+<h3>What Helix has</h3>
+<p>Custom HTML5 tokenizer &bull; DOM builder &bull; CSS cascade with combinators &bull;
+Attribute selectors &bull; Inline &amp; block layout &bull; Direct2D renderer &bull;
+WIC image loading &bull; Tabs &bull; Per-tab history &bull; Zoom</p>
 </body>
 </html>)html";
 
-// ─── navigation ──────────────────────────────────────────────────────────────
-static void Navigate(const std::string& rawUrl, bool pushHistory = true);
-
-static void PushHistory(const std::string& url) {
-    if (g_histIdx + 1 < (int)g_history.size())
-        g_history.erase(g_history.begin() + g_histIdx + 1, g_history.end());
-    g_history.push_back(url);
-    g_histIdx = (int)g_history.size() - 1;
+// ─── title extraction ────────────────────────────────────────────────────────
+static std::string ExtractTitle(const Node* root) {
+    if (!root) return {};
+    std::function<std::string(const Node*)> find = [&](const Node* n) -> std::string {
+        if (!n) return {};
+        if (n->type == NodeType::Element && n->tagName == "title") {
+            std::string t;
+            for (auto& c : n->children)
+                if (c->type == NodeType::Text) t += c->text;
+            while (!t.empty() && isspace((unsigned char)t.front())) t.erase(t.begin());
+            while (!t.empty() && isspace((unsigned char)t.back()))  t.pop_back();
+            return t;
+        }
+        for (auto& c : n->children) {
+            auto r = find(c.get());
+            if (!r.empty()) return r;
+        }
+        return {};
+    };
+    return find(root);
 }
 
-static void Navigate(const std::string& rawUrl, bool pushHistory) {
-    if (g_loading.load()) return;
+// ─── navigation ──────────────────────────────────────────────────────────────
+static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory = true);
+static void Navigate(const std::string& rawUrl, bool push = true) {
+    Navigate(g_activeTab, rawUrl, push);
+}
+
+static void TabPushHistory(Tab& tab, const std::string& url) {
+    if (tab.histIdx + 1 < (int)tab.history.size())
+        tab.history.erase(tab.history.begin() + tab.histIdx + 1, tab.history.end());
+    tab.history.push_back(url);
+    tab.histIdx = (int)tab.history.size() - 1;
+}
+
+static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
+    if (tabIdx < 0 || tabIdx >= (int)g_tabs.size()) return;
+    Tab& tab = g_tabs[tabIdx];
+    if (tab.loading) return;
 
     std::string url = rawUrl;
 
-    // ── built-in: home ─────────────────────────────────────────────────────
-    if (url.empty() || url == "felix://home" || url == "helix://home") {
+    // ── built-in: home ──────────────────────────────────────────────────
+    if (url.empty() || url == "helix://home" || url == "felix://home") {
         url = "helix://home";
-        auto* p = new Page{ url, ParseHtml(kHomeHtml), {} };
-        g_page.reset(p);
-        g_scrollY = 0.f;
-        if (pushHistory) PushHistory(url);
-        SetUrlBar(url);
-        SetWindowTextW(g_hwnd, L"Helix");
-        UpdateScrollbar();
-        InvalidateRect(g_hwnd, NULL, FALSE);
+        tab.page.reset(new Page{ url, ParseHtml(kHomeHtml), {} });
+        tab.title   = "Helix";
+        tab.scrollY = 0.f;
+        if (pushHistory) TabPushHistory(tab, url);
+        if (tabIdx == g_activeTab) {
+            SetUrlBar(url);
+            UpdateTitle();
+            UpdateScrollbar();
+            InvalidateRect(g_hwnd, NULL, FALSE);
+        }
         return;
     }
 
-    // ── built-in: history ──────────────────────────────────────────────────
-    if (url == "felix://history" || url == "helix://history") {
+    // ── built-in: history ──────────────────────────────────────────────
+    if (url == "helix://history" || url == "felix://history") {
         url = "helix://history";
         std::string html = "<html><body><h1>History</h1>";
         bool any = false;
-        for (int i = (int)g_history.size() - 1; i >= 0; i--) {
-            const auto& h = g_history[i];
-            if (h == "helix://history" || h == "felix://history") continue;
+        for (int i = (int)tab.history.size() - 1; i >= 0; i--) {
+            const auto& h = tab.history[i];
+            if (h == "helix://history") continue;
             html += "<p><a href=\"" + h + "\">" + h + "</a></p>";
             any = true;
         }
         if (!any) html += "<p>No history yet.</p>";
         html += "</body></html>";
-        auto* p = new Page{ url, ParseHtml(html), {} };
-        g_page.reset(p);
-        g_scrollY = 0.f;
-        if (pushHistory) PushHistory(url);
-        SetUrlBar(url);
-        SetTitle(L"History");
-        UpdateScrollbar();
-        InvalidateRect(g_hwnd, NULL, FALSE);
+        tab.page.reset(new Page{ url, ParseHtml(html), {} });
+        tab.title   = "History";
+        tab.scrollY = 0.f;
+        if (pushHistory) TabPushHistory(tab, url);
+        if (tabIdx == g_activeTab) {
+            SetUrlBar(url);
+            UpdateTitle();
+            UpdateScrollbar();
+            InvalidateRect(g_hwnd, NULL, FALSE);
+        }
         return;
     }
 
     if (url.find("://") == std::string::npos)
         url = "https://" + url;
 
-    g_loading = true;
-    EnableWindow(g_hwndStop, TRUE);
-    EnableWindow(g_hwndRefr, FALSE);
-    SetUrlBar(url);
-    SetWindowTextW(g_hwnd, L"Loading… — Helix");
+    tab.loading = true;
+    tab.url     = url;
+    tab.title   = "Loading…";
+    if (pushHistory) TabPushHistory(tab, url);
 
-    if (pushHistory) PushHistory(url);
+    if (tabIdx == g_activeTab) {
+        EnableWindow(g_hwndStop, TRUE);
+        EnableWindow(g_hwndRefr, FALSE);
+        SetUrlBar(url);
+        UpdateTitle();
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    }
 
     HWND hwnd = g_hwnd;
-    std::thread([hwnd, url]() {
+    std::thread([hwnd, url, tabIdx]() {
         auto* p = new Page;
-        p->url  = url;
+        p->url   = url;
         auto res = FetchUrl(url);
         if (res.success) {
             p->dom = ParseHtml(res.body);
@@ -198,34 +264,80 @@ static void Navigate(const std::string& rawUrl, bool pushHistory) {
         } else {
             p->error = res.error;
         }
-        PostMessageW(hwnd, WM_PAGE_READY, 0, (LPARAM)p);
+        auto* pm = new PageMsg{ tabIdx, p };
+        PostMessageW(hwnd, WM_PAGE_READY, 0, (LPARAM)pm);
     }).detach();
 }
 
 static void GoBack() {
-    if (g_histIdx > 0) Navigate(g_history[--g_histIdx], false);
+    Tab& tab = CurTab();
+    if (tab.histIdx > 0) Navigate(g_activeTab, tab.history[--tab.histIdx], false);
 }
 static void GoForward() {
-    if (g_histIdx + 1 < (int)g_history.size()) Navigate(g_history[++g_histIdx], false);
+    Tab& tab = CurTab();
+    if (tab.histIdx + 1 < (int)tab.history.size())
+        Navigate(g_activeTab, tab.history[++tab.histIdx], false);
+}
+
+// ─── tab management ───────────────────────────────────────────────────────────
+static void NewTab(const std::string& url = "helix://home") {
+    g_tabs.emplace_back();
+    int idx = (int)g_tabs.size() - 1;
+    g_activeTab = idx;
+    InvalidateRect(g_hwnd, NULL, FALSE);
+    Navigate(idx, url);
+}
+
+static void CloseTab(int idx) {
+    if (g_tabs.size() <= 1) {
+        Navigate("helix://home");
+        return;
+    }
+    g_tabs.erase(g_tabs.begin() + idx);
+    if (g_activeTab >= (int)g_tabs.size())
+        g_activeTab = (int)g_tabs.size() - 1;
+    SetUrlBar(CurTab().url);
+    UpdateTitle();
+    UpdateScrollbar();
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
+static void SwitchTab(int idx) {
+    if (idx < 0 || idx >= (int)g_tabs.size()) return;
+    g_activeTab = idx;
+    const Tab& tab = CurTab();
+    SetUrlBar(tab.url);
+    UpdateTitle();
+    if (tab.loading) {
+        EnableWindow(g_hwndStop, TRUE);
+        EnableWindow(g_hwndRefr, FALSE);
+    } else {
+        EnableWindow(g_hwndStop, FALSE);
+        EnableWindow(g_hwndRefr, TRUE);
+    }
+    ClampScroll();
+    UpdateScrollbar();
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 // ─── control layout ──────────────────────────────────────────────────────────
 static void LayoutControls() {
     RECT rc; GetClientRect(g_hwnd, &rc);
     int w = rc.right, h = rc.bottom;
-    int y = (TOOLBAR_H - BTN_H) / 2;
-    int x = MARGIN;
-    SetWindowPos(g_hwndBack, NULL, x,               y, BTN_W, BTN_H, SWP_NOZORDER);
-    SetWindowPos(g_hwndFwrd, NULL, x + BTN_W,       y, BTN_W, BTN_H, SWP_NOZORDER);
-    SetWindowPos(g_hwndRefr, NULL, x + BTN_W * 2,   y, BTN_W, BTN_H, SWP_NOZORDER);
-    SetWindowPos(g_hwndStop, NULL, x + BTN_W * 3,   y, BTN_W, BTN_H, SWP_NOZORDER);
-    SetWindowPos(g_hwndHome, NULL, x + BTN_W * 4,   y, BTN_W, BTN_H, SWP_NOZORDER);
+    int btnY = TAB_H + (TOOLBAR_H - BTN_H) / 2;
+    int x    = MARGIN;
+    SetWindowPos(g_hwndBack, NULL, x,               btnY, BTN_W, BTN_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndFwrd, NULL, x + BTN_W,       btnY, BTN_W, BTN_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndRefr, NULL, x + BTN_W * 2,   btnY, BTN_W, BTN_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndStop, NULL, x + BTN_W * 3,   btnY, BTN_W, BTN_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndHome, NULL, x + BTN_W * 4,   btnY, BTN_W, BTN_H, SWP_NOZORDER);
     int urlX = x + BTN_W * 5 + MARGIN;
-    SetWindowPos(g_hwndUrl,    NULL, urlX, y, w - urlX - MARGIN, BTN_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndUrl,    NULL, urlX, btnY, w - urlX - MARGIN, BTN_H, SWP_NOZORDER);
     SetWindowPos(g_hwndStatus, NULL, 0, h - STATUS_H, w, STATUS_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndFind,   NULL, 0, h - STATUS_H - FIND_H, w, FIND_H, SWP_NOZORDER);
 }
 
-// ─── URL bar subclass (Enter key) ────────────────────────────────────────────
+// ─── URL bar subclass ─────────────────────────────────────────────────────────
 LRESULT CALLBACK UrlProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                           UINT_PTR, DWORD_PTR) {
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
@@ -235,6 +347,56 @@ LRESULT CALLBACK UrlProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         return 0;
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// ─── find bar helpers ─────────────────────────────────────────────────────────
+static void ShowFind(bool show) {
+    g_findVisible = show;
+    ShowWindow(g_hwndFind, show ? SW_SHOW : SW_HIDE);
+    if (show) {
+        SetFocus(g_hwndFind);
+        SendMessageW(g_hwndFind, EM_SETSEL, 0, -1);
+    } else {
+        g_renderer.SetSearchQuery(L"");
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    }
+    // Re-layout status bar (find bar sits above it)
+    RECT rc; GetClientRect(g_hwnd, &rc);
+    int w = rc.right, h = rc.bottom;
+    SetWindowPos(g_hwndStatus, NULL, 0, h - STATUS_H, w, STATUS_H, SWP_NOZORDER);
+    SetWindowPos(g_hwndFind,   NULL, 0, h - STATUS_H - FIND_H, w, FIND_H, SWP_NOZORDER);
+}
+
+LRESULT CALLBACK FindProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                           UINT_PTR, DWORD_PTR) {
+    if (msg == WM_KEYDOWN) {
+        if (wp == VK_ESCAPE) { ShowFind(false); return 0; }
+        if (wp == VK_RETURN) { return 0; }
+    }
+    if (msg == WM_CHAR || (msg == WM_KEYDOWN && wp != VK_ESCAPE)) {
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        // Update search query from current text
+        wchar_t buf[512] = {};
+        GetWindowTextW(hwnd, buf, 512);
+        g_renderer.SetSearchQuery(buf);
+        InvalidateRect(g_hwnd, NULL, FALSE);
+        return r;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// ─── build tab entries for renderer ──────────────────────────────────────────
+static std::vector<TabEntry> BuildTabEntries() {
+    std::vector<TabEntry> entries;
+    entries.reserve(g_tabs.size());
+    for (int i = 0; i < (int)g_tabs.size(); i++) {
+        TabEntry e;
+        e.title   = ToWide(g_tabs[i].title.empty() ? "New Tab" : g_tabs[i].title);
+        e.active  = (i == g_activeTab);
+        e.loading = g_tabs[i].loading;
+        entries.push_back(std::move(e));
+    }
+    return entries;
 }
 
 // ─── WndProc ─────────────────────────────────────────────────────────────────
@@ -259,13 +421,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_hwndUrl = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
             0,0,0,0, hwnd, (HMENU)IDC_URL, hi, NULL);
-
         g_hwndStatus = CreateWindowW(L"STATIC", L"",
             WS_CHILD | WS_VISIBLE | SS_LEFT | SS_SUNKEN,
             0,0,0,0, hwnd, NULL, hi, NULL);
 
+        g_hwndFind = CreateWindowW(L"EDIT", L"",
+            WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+            0,0,0,0, hwnd, (HMENU)IDC_FIND, hi, NULL);
+
         EnableWindow(g_hwndStop, FALSE);
-        SetWindowSubclass(g_hwndUrl, UrlProc, 1, 0);
+        SetWindowSubclass(g_hwndUrl,  UrlProc,  1, 0);
+        SetWindowSubclass(g_hwndFind, FindProc, 2, 0);
 
         g_renderer.SetImageRequestCallback([hwnd](std::string url) {
             std::thread([hwnd, url]() {
@@ -280,7 +446,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         });
 
         g_renderer.Init(hwnd);
-        Navigate("helix://home");
+
+        // Start with one tab
+        g_tabs.emplace_back();
+        Navigate(std::string("helix://home"));
         return 0;
     }
 
@@ -297,33 +466,73 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         BeginPaint(hwnd, &ps);
-        if (g_page && g_page->dom)
-            g_docHeight = g_renderer.Paint(g_page->dom, g_scrollY, g_page->url,
-                                           (float)TOOLBAR_H);
-        else
-            g_renderer.Paint(nullptr, 0.f, {}, (float)TOOLBAR_H);
+
+        auto tabs = BuildTabEntries();
+        const Tab& cur = CurTab();
+        if (cur.page && cur.page->dom) {
+            CurTab().docHeight = g_renderer.Paint(
+                cur.page->dom, cur.scrollY, cur.page->url,
+                (float)TOP_INSET, (float)TAB_H, &tabs);
+        } else {
+            g_renderer.Paint(nullptr, 0.f, {},
+                (float)TOP_INSET, (float)TAB_H, &tabs);
+        }
         UpdateScrollbar();
         EndPaint(hwnd, &ps);
         return 0;
     }
 
     case WM_PAGE_READY: {
-        auto* p = reinterpret_cast<Page*>(lp);
-        g_page.reset(p);
-        g_scrollY = 0.f;
-        g_loading = false;
-        EnableWindow(g_hwndStop, FALSE);
-        EnableWindow(g_hwndRefr, TRUE);
-        if (p->dom) {
-            SetUrlBar(p->url);
-            SetTitle(ToWide(p->url));
-        } else {
-            std::string html = "<html><body><h2>Error</h2><p>" + p->error + "</p></body></html>";
-            g_page->dom = ParseHtml(html);
-            SetWindowTextW(hwnd, L"Error — Helix");
+        auto* pm = reinterpret_cast<PageMsg*>(lp);
+        int idx  = pm->tabIdx;
+        Page* p  = pm->page;
+        delete pm;
+
+        if (idx >= 0 && idx < (int)g_tabs.size()) {
+            Tab& tab   = g_tabs[idx];
+            tab.page.reset(p);
+            tab.scrollY = 0.f;
+            tab.loading = false;
+            if (p->dom) {
+                tab.url = p->url;
+                std::string title = ExtractTitle(p->dom.get());
+                tab.title = title.empty() ? p->url : title;
+            } else {
+                std::string html = "<html><body><h2>Error</h2><p>"
+                    + p->error + "</p></body></html>";
+                tab.page->dom = ParseHtml(html);
+                tab.title = "Error";
+            }
         }
-        ClampScroll();
-        UpdateScrollbar();
+
+        if (idx == g_activeTab) {
+            EnableWindow(g_hwndStop, FALSE);
+            EnableWindow(g_hwndRefr, TRUE);
+            SetUrlBar(CurTab().url);
+            UpdateTitle();
+            ClampScroll();
+            UpdateScrollbar();
+        }
+
+        // Run <script> tags in the loaded page
+        if (idx >= 0 && idx < (int)g_tabs.size() && g_tabs[idx].page && g_tabs[idx].page->dom) {
+            auto repaint = [hwnd]() { InvalidateRect(hwnd, NULL, FALSE); };
+            g_js.setDocument(g_tabs[idx].page->dom, repaint);
+            std::function<void(const Node*)> runScripts = [&](const Node* n) {
+                if (!n) return;
+                if (n->type == NodeType::Element && n->tagName == "script") {
+                    std::string src;
+                    for (auto& c : n->children)
+                        if (c->type == NodeType::Text) src += c->text;
+                    if (!src.empty()) g_js.runScript(src, "inline");
+                }
+                for (auto& c : n->children) runScripts(c.get());
+            };
+            runScripts(g_tabs[idx].page->dom.get());
+            // Set up timer for macrotasks / setTimeout
+            SetTimer(hwnd, 1, 16, NULL);
+        }
+
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
@@ -340,11 +549,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SCROLLINFO si = { sizeof(si), SIF_ALL };
         GetScrollInfo(hwnd, SB_VERT, &si);
         switch (LOWORD(wp)) {
-        case SB_LINEUP:     g_scrollY -= 30.f;                break;
-        case SB_LINEDOWN:   g_scrollY += 30.f;                break;
-        case SB_PAGEUP:     g_scrollY -= (float)si.nPage;     break;
-        case SB_PAGEDOWN:   g_scrollY += (float)si.nPage;     break;
-        case SB_THUMBTRACK: g_scrollY  = (float)si.nTrackPos; break;
+        case SB_LINEUP:     CurTab().scrollY -= 30.f;                    break;
+        case SB_LINEDOWN:   CurTab().scrollY += 30.f;                    break;
+        case SB_PAGEUP:     CurTab().scrollY -= (float)si.nPage;         break;
+        case SB_PAGEDOWN:   CurTab().scrollY += (float)si.nPage;         break;
+        case SB_THUMBTRACK: CurTab().scrollY  = (float)si.nTrackPos;     break;
         }
         ClampScroll();
         UpdateScrollbar();
@@ -353,22 +562,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_MOUSEWHEEL: {
-        g_scrollY -= GET_WHEEL_DELTA_WPARAM(wp) * 0.5f;
+        CurTab().scrollY -= GET_WHEEL_DELTA_WPARAM(wp) * 0.5f;
         ClampScroll();
         UpdateScrollbar();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
 
-    case WM_MOUSEMOVE: {
+    case WM_LBUTTONDOWN: {
         int px = (int)(short)LOWORD(lp);
         int py = (int)(short)HIWORD(lp);
-        if (py > TOOLBAR_H) {
-            std::string href = g_renderer.HitTest((float)px, (float)py);
-            SetCursor(href.empty() ? g_cursorArrow : g_cursorHand);
-            SetStatus(href);
-        } else {
-            SetStatus({});
+        // Check tab strip
+        if (py < TAB_H) {
+            int closeIdx = -1;
+            if (g_renderer.HitTestTabClose((float)px, (float)py, closeIdx)) {
+                CloseTab(closeIdx);
+            } else {
+                int tidx = g_renderer.HitTestTab((float)px, (float)py);
+                if (tidx == -1) {
+                    NewTab();
+                } else if (tidx >= 0) {
+                    SwitchTab(tidx);
+                }
+            }
+            return 0;
         }
         return 0;
     }
@@ -376,9 +593,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONUP: {
         int px = (int)(short)LOWORD(lp);
         int py = (int)(short)HIWORD(lp);
-        if (py > TOOLBAR_H) {
+        if (py >= TOP_INSET) {
             std::string href = g_renderer.HitTest((float)px, (float)py);
             if (!href.empty()) Navigate(href);
+        }
+        return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+        int px = (int)(short)LOWORD(lp);
+        int py = (int)(short)HIWORD(lp);
+        if (py >= TOP_INSET) {
+            std::string href = g_renderer.HitTest((float)px, (float)py);
+            SetCursor(href.empty() ? g_cursorArrow : g_cursorHand);
+            SetStatus(href);
+        } else {
+            SetCursor(g_cursorArrow);
+            SetStatus({});
         }
         return 0;
     }
@@ -389,14 +620,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDC_FWRD: GoForward(); break;
         case IDC_HOME: Navigate("helix://home"); break;
         case IDC_REFR:
-            if (g_page) Navigate(g_page->url, false);
+            if (CurTab().page) Navigate(CurTab().url, false);
             break;
         case IDC_STOP:
-            g_loading = false;
+            CurTab().loading = false;
             EnableWindow(g_hwndStop, FALSE);
             EnableWindow(g_hwndRefr, TRUE);
             break;
         }
+        return 0;
+
+    case WM_TIMER:
+        g_js.runMacrotasks();
         return 0;
 
     case WM_ERASEBKGND:
@@ -426,7 +661,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
     g_hwnd = CreateWindowExW(0,
         L"HelixBrowser", L"Helix",
         WS_OVERLAPPEDWINDOW | WS_VSCROLL,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 900,
         NULL, NULL, hInst, NULL);
 
     ShowWindow(g_hwnd, nShow);
@@ -434,43 +669,77 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
-        // ── global keyboard shortcuts ──────────────────────────────────────
         if (msg.message == WM_KEYDOWN) {
-            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+            bool ctrl    = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool alt     = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+            bool shift   = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
             bool handled = false;
 
-            if (ctrl && msg.wParam == 'L') {
-                SetFocus(g_hwndUrl);
-                SendMessageW(g_hwndUrl, EM_SETSEL, 0, -1);
+            if (ctrl) {
+                if (msg.wParam == 'L') {
+                    SetFocus(g_hwndUrl);
+                    SendMessageW(g_hwndUrl, EM_SETSEL, 0, -1);
+                    handled = true;
+                } else if (msg.wParam == 'T') {
+                    NewTab();
+                    handled = true;
+                } else if (msg.wParam == 'W') {
+                    CloseTab(g_activeTab);
+                    handled = true;
+                } else if (msg.wParam == VK_TAB) {
+                    int next = (g_activeTab + (shift ? -1 : 1) + (int)g_tabs.size())
+                             % (int)g_tabs.size();
+                    SwitchTab(next);
+                    handled = true;
+                } else if (msg.wParam >= '1' && msg.wParam <= '9') {
+                    SwitchTab((int)(msg.wParam - '1'));
+                    handled = true;
+                } else if (msg.wParam == 'R' || msg.wParam == VK_F5) {
+                    if (!CurTab().loading) Navigate(CurTab().url, false);
+                    handled = true;
+                } else if (msg.wParam == 'H') {
+                    Navigate("helix://history");
+                    handled = true;
+                } else if (msg.wParam == 'F') {
+                    ShowFind(!g_findVisible);
+                    handled = true;
+                } else if (msg.wParam == 'G') {
+                    // Ctrl+G / Ctrl+Shift+G = find next / prev (stub for now)
+                    handled = true;
+                } else if (msg.wParam == VK_OEM_PLUS || msg.wParam == '=') {
+                    g_renderer.SetZoom(g_renderer.GetZoom() + 0.1f);
+                    InvalidateRect(g_hwnd, NULL, FALSE);
+                    handled = true;
+                } else if (msg.wParam == VK_OEM_MINUS) {
+                    g_renderer.SetZoom(g_renderer.GetZoom() - 0.1f);
+                    InvalidateRect(g_hwnd, NULL, FALSE);
+                    handled = true;
+                } else if (msg.wParam == '0') {
+                    g_renderer.SetZoom(1.f);
+                    InvalidateRect(g_hwnd, NULL, FALSE);
+                    handled = true;
+                }
+            }
+
+            if (!handled && msg.wParam == VK_F5) {
+                if (!CurTab().loading) Navigate(CurTab().url, false);
                 handled = true;
-            } else if ((ctrl && msg.wParam == 'R') || msg.wParam == VK_F5) {
-                if (g_page && !g_loading) Navigate(g_page->url, false);
-                handled = true;
-            } else if (alt && msg.wParam == VK_LEFT) {
-                GoBack(); handled = true;
-            } else if (alt && msg.wParam == VK_RIGHT) {
-                GoForward(); handled = true;
-            } else if (msg.wParam == VK_ESCAPE && g_loading) {
-                g_loading = false;
-                EnableWindow(g_hwndStop, FALSE);
-                EnableWindow(g_hwndRefr, TRUE);
-                handled = true;
-            } else if (ctrl && msg.wParam == 'H') {
-                Navigate("helix://history");
-                handled = true;
-            } else if (ctrl && (msg.wParam == VK_OEM_PLUS || msg.wParam == '=')) {
-                g_renderer.SetZoom(g_renderer.GetZoom() + 0.1f);
-                InvalidateRect(g_hwnd, NULL, FALSE);
-                handled = true;
-            } else if (ctrl && msg.wParam == VK_OEM_MINUS) {
-                g_renderer.SetZoom(g_renderer.GetZoom() - 0.1f);
-                InvalidateRect(g_hwnd, NULL, FALSE);
-                handled = true;
-            } else if (ctrl && msg.wParam == '0') {
-                g_renderer.SetZoom(1.f);
-                InvalidateRect(g_hwnd, NULL, FALSE);
-                handled = true;
+            }
+            if (!handled && alt) {
+                if (msg.wParam == VK_LEFT)  { GoBack();    handled = true; }
+                if (msg.wParam == VK_RIGHT) { GoForward(); handled = true; }
+            }
+            if (!handled && msg.wParam == VK_ESCAPE) {
+                if (g_findVisible) {
+                    ShowFind(false);
+                    handled = true;
+                } else if (CurTab().loading) {
+                    CurTab().loading = false;
+                    CurTab().title   = CurTab().url;
+                    EnableWindow(g_hwndStop, FALSE);
+                    EnableWindow(g_hwndRefr, TRUE);
+                    handled = true;
+                }
             }
 
             if (handled) continue;

@@ -12,12 +12,24 @@ add_library(helix_engine STATIC
     src/css/stylesheet.cpp
     src/layout/layout.cpp
     src/paint/display_list.cpp
+    src/js/gc.cpp
+    src/js/lexer.cpp
+    src/js/parser.cpp
+    src/js/compiler.cpp
+    src/js/vm.cpp
+    src/js/runtime.cpp
+    src/js/dom_bridge.cpp
+    src/js/engine.cpp
 )
 
 target_include_directories(helix_engine PUBLIC src)
 target_compile_definitions(helix_engine PUBLIC
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
 )
+if (MSVC)
+    # /EHa: catch SEH exceptions (stack overflow, access violation) in catch(...)
+    target_compile_options(helix_engine PUBLIC /EHa)
+endif()
 
 add_executable(Helix WIN32
     src/main.cpp
@@ -37,6 +49,7 @@ add_executable(helix-tests
     src/test/css_tests.cpp
     src/test/layout_tests.cpp
     src/test/paint_tests.cpp
+    src/test/js_tests.cpp
 )
 
 target_include_directories(helix-tests PRIVATE src)
