@@ -179,6 +179,16 @@ static bool MatchesSimpleSelector(const CssSelectorPart& part, const Node* node)
     return true;
 }
 
+static const Node* PreviousElementSibling(const Node* node) {
+    if (!node || !node->parent) return nullptr;
+    const Node* previous = nullptr;
+    for (const auto& child : node->parent->children) {
+        if (child.get() == node) return previous;
+        if (child->type == NodeType::Element) previous = child.get();
+    }
+    return nullptr;
+}
+
 int CssRule::specificity() const {
     if (selector.empty()) {
         return (!id.empty() ? 100 : 0)
@@ -209,6 +219,9 @@ bool CssRule::matches(const Node* node) const {
 
             if (combinator == '>') {
                 current = current->parent;
+                if (!MatchesSimpleSelector(wanted, current)) return false;
+            } else if (combinator == '+') {
+                current = PreviousElementSibling(current);
                 if (!MatchesSimpleSelector(wanted, current)) return false;
             } else {
                 const Node* ancestor = current->parent;
@@ -324,7 +337,11 @@ static std::vector<CssSelectorPart> parseSelectorChain(std::string selector) {
     std::string spaced;
     spaced.reserve(selector.size() + 4);
     for (char c : selector) {
-        if (c == '>') spaced += " > ";
+        if (c == '>' || c == '+') {
+            spaced += ' ';
+            spaced += c;
+            spaced += ' ';
+        }
         else spaced += c;
     }
 
@@ -333,8 +350,8 @@ static std::vector<CssSelectorPart> parseSelectorChain(std::string selector) {
     std::string tok;
     char nextCombinator = 0;
     while (ss >> tok) {
-        if (tok == ">") {
-            nextCombinator = '>';
+        if (tok == ">" || tok == "+") {
+            nextCombinator = tok[0];
             continue;
         }
         CssSelectorPart part = parseSimpleSelectorPart(tok);

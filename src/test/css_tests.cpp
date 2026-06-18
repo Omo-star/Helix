@@ -73,5 +73,20 @@ TestResult RunCssTests() {
         ExpectEqual("css/cascade/attribute-selectors", actual, expected, result);
     }
 
+    {
+        auto html = ReadTextFile(root / "tests/fixtures/css/cascade/adjacent-sibling.in.html");
+        auto css = ReadTextFile(root / "tests/fixtures/css/cascade/adjacent-sibling.in.css");
+        auto expected = ReadTextFile(root / "tests/fixtures/css/cascade/adjacent-sibling.expected.txt");
+        auto dom = ParseHtml(html);
+        auto sheet = ParseStylesheet(css);
+        std::string actual;
+        for (const std::string id : { "lead", "later", "nested" }) {
+            auto* node = FindElementById(dom.get(), id);
+            actual += id + ": ";
+            actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        }
+        ExpectEqual("css/cascade/adjacent-sibling", actual, expected, result);
+    }
+
     return result;
 }

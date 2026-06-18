@@ -11,7 +11,7 @@ struct CssSelectorPart {
     std::string attrName;  // "" = no attribute selector
     std::string attrValue; // only used when attrHasValue = true
     bool attrHasValue = false;
-    char combinator = 0;   // 0 = first part, ' ' = descendant, '>' = child
+    char combinator = 0;   // 0 = first part, ' ' = descendant, '>' = child, '+' = adjacent sibling
 };
 
 struct CssRule {
