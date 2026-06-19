@@ -950,9 +950,14 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         float pLeft = cs.paddingLeft  >= 0 ? cs.paddingLeft   * m_zoom : 0.f;
         float pRight= cs.paddingRight >= 0 ? cs.paddingRight  * m_zoom : 0.f;
         float bw    = cs.borderWidth  >= 0 ? cs.borderWidth   * m_zoom : 0.f;
-        float pw    = cs.width        >= 0 ? cs.width         * m_zoom : -1.f;
+        float pw    = cs.widthPercent >= 0 ? prevW * (cs.widthPercent / 100.f)
+                    : cs.width        >= 0 ? cs.width         * m_zoom : -1.f;
         float maxw  = cs.maxWidth     >= 0 ? cs.maxWidth      * m_zoom : -1.f;
 
+        bool isFloat = isBlock && notRoot && cs.floatMode != 0;
+        bool outOfFlow = isBlock && notRoot && (cs.positionMode == 2 || cs.positionMode == 3);
+        float flowStartY = ctx.y;
+        if (cs.clearMode != 0 && ctx.floatBottom > ctx.y) ctx.y = ctx.floatBottom;
         if (isBlock) ctx.y += mTop;
         float boxStartY = ctx.y;
 
@@ -964,8 +969,19 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         bool autoCenter = (cs.marginLeft <= -1.5f && cs.marginRight <= -1.5f && maxw >= 0 && innerW < prevW);
         if (autoCenter) mLeft = (prevW - innerW - (bw+pLeft) - (bw+pRight)) * 0.5f;
 
+        float outerW = innerW + (bw + pLeft) + (bw + pRight);
+        float boxLeft = prevX + mLeft;
+        if (isFloat && cs.floatMode == 2) boxLeft = prevX + std::max(0.f, prevW - outerW);
+        if (outOfFlow) {
+            if (cs.left >= 0) boxLeft = cs.left * m_zoom;
+            if (cs.top >= 0) {
+                boxStartY = cs.top * m_zoom;
+                ctx.y = boxStartY;
+            }
+        }
+
         // Set up inner ctx
-        ctx.x        = prevX + mLeft + bw + pLeft;
+        ctx.x        = boxLeft + bw + pLeft;
         ctx.contentW = innerW;
         ctx.y       += bw + pTop;
 
@@ -985,8 +1001,8 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
                 if (cey > csy) {
                     auto* bg = TempBrush(ToD2D(cs.bgColor));
                     if (bg) {
-                        D2D1_RECT_F rect = D2D1::RectF(prevX + mLeft, sy,
-                                                        prevX + mLeft + innerW + (bw+pLeft) + (bw+pRight), ey);
+                        D2D1_RECT_F rect = D2D1::RectF(boxLeft, sy,
+                                                        boxLeft + outerW, ey);
                         if (cs.borderRadius > 0)
                             m_rt->FillRoundedRectangle(
                                 D2D1::RoundedRect(rect, cs.borderRadius * m_zoom, cs.borderRadius * m_zoom), bg);
@@ -1009,8 +1025,8 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
             if (ey > ctx.topInset && sy < ctx.winH) {
                 auto* bc = cs.borderColor.valid ? TempBrush(ToD2D(cs.borderColor)) : m_hrBrush;
                 if (bc) {
-                    D2D1_RECT_F rect = D2D1::RectF(prevX + mLeft, sy,
-                                                    prevX + mLeft + innerW + (bw+pLeft) + (bw+pRight), ey);
+                    D2D1_RECT_F rect = D2D1::RectF(boxLeft, sy,
+                                                    boxLeft + outerW, ey);
                     if (cs.borderRadius > 0)
                         m_rt->DrawRoundedRectangle(
                             D2D1::RoundedRect(rect, cs.borderRadius * m_zoom, cs.borderRadius * m_zoom), bc, bw);
@@ -1020,7 +1036,15 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
             }
         }
 
-        if (isBlock) ctx.y += mBot;
+        if (isFloat) {
+            ctx.floatBottom = std::max(ctx.floatBottom, boxEndY + mBot);
+            ctx.y = flowStartY;
+        } else if (outOfFlow) {
+            ctx.y = flowStartY;
+        } else {
+            if (ctx.floatBottom > ctx.y) ctx.y = ctx.floatBottom;
+            if (isBlock) ctx.y += mBot;
+        }
     }
 
 restore:

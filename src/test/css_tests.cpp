@@ -115,5 +115,23 @@ TestResult RunCssTests() {
         ExpectEqual("css/cascade/pseudo-classes", actual, expected, result);
     }
 
+    {
+        auto dom = ParseHtml("<html><body class=\"category\"><div id=\"content-main\"></div><a id=\"skip\"></a></body></html>");
+        auto sheet = ParseStylesheet(
+            "body.category #content-main { float: right; width: 60%; overflow: hidden; }"
+            "a#skip { display: block; position: absolute; top: 0; left: 0; width: 100%; }");
+        std::string actual;
+        for (const std::string id : { "content-main", "skip" }) {
+            auto* node = FindElementById(dom.get(), id);
+            actual += id + ": ";
+            actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        }
+        ExpectEqual("css/cascade/wasp-layout-primitives",
+            actual,
+            "content-main: widthPercent=60 float=right overflow=hidden \n"
+            "skip: display=block widthPercent=100 position=absolute top=0 left=0 \n",
+            result);
+    }
+
     return result;
 }

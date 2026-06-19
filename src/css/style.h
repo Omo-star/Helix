@@ -19,6 +19,7 @@ struct ComputedStyle {
     bool     italicSet    = false;
     bool     underline    = false;
     bool     displayNone  = false;
+    bool     displayBlock = false;
     // Box model (-1 = not set, -2 = auto)
     float    marginTop    = -1;
     float    marginRight  = -1;
@@ -41,10 +42,20 @@ struct ComputedStyle {
     bool     whiteSpaceSet   = false;
     // Sizing
     float    width        = -1;
+    float    widthPercent = -1;
     float    height       = -1;
     float    maxWidth     = -1;
     float    minWidth     = -1;
     float    minHeight    = -1;
+    // Layout
+    int      floatMode    = 0;       // 0=none, 1=left, 2=right
+    int      clearMode    = 0;       // 0=none, 1=left, 2=right, 3=both
+    int      positionMode = 0;       // 0=static, 1=relative, 2=absolute, 3=fixed
+    bool     overflowHidden = false;
+    float    top          = -1;
+    float    right        = -1;
+    float    bottom       = -1;
+    float    left         = -1;
     // Flex (very simplified)
     bool     displayFlex  = false;
 
@@ -59,6 +70,7 @@ struct ComputedStyle {
         if (child.italicSet) { out.italic = child.italic; out.italicSet = true; }
         if (child.underline)    out.underline   = true;
         if (child.displayNone)  out.displayNone = true;
+        if (child.displayBlock) out.displayBlock = true;
         if (child.displayFlex)  out.displayFlex = true;
         if (child.marginTop    >= -1.5f) out.marginTop    = child.marginTop;
         if (child.marginRight  >= -1.5f) out.marginRight  = child.marginRight;
@@ -76,10 +88,19 @@ struct ComputedStyle {
         if (child.textTransformSet) { out.textTransform = child.textTransform; out.textTransformSet = true; }
         if (child.whiteSpaceSet) { out.whiteSpaceNowrap = child.whiteSpaceNowrap; out.whiteSpaceSet = true; }
         if (child.width        >= 0) out.width     = child.width;
+        if (child.widthPercent >= 0) out.widthPercent = child.widthPercent;
         if (child.height       >= 0) out.height    = child.height;
         if (child.maxWidth     >= 0) out.maxWidth  = child.maxWidth;
         if (child.minWidth     >= 0) out.minWidth  = child.minWidth;
         if (child.minHeight    >= 0) out.minHeight = child.minHeight;
+        if (child.floatMode    != 0) out.floatMode = child.floatMode;
+        if (child.clearMode    != 0) out.clearMode = child.clearMode;
+        if (child.positionMode != 0) out.positionMode = child.positionMode;
+        if (child.overflowHidden) out.overflowHidden = true;
+        if (child.top          >= 0) out.top    = child.top;
+        if (child.right        >= 0) out.right  = child.right;
+        if (child.bottom       >= 0) out.bottom = child.bottom;
+        if (child.left         >= 0) out.left   = child.left;
         return out;
     }
 };

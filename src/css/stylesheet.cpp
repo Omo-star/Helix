@@ -41,6 +41,18 @@ static float ParseLength(const std::string& raw) {
     return num;  // unrecognized unit, treat as px
 }
 
+static float ParsePercentage(const std::string& raw) {
+    std::string s = raw;
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && std::isspace((unsigned char)s.back()))  s.pop_back();
+    if (s.empty() || s.back() != '%') return -1;
+    try {
+        return std::stof(s.substr(0, s.size() - 1));
+    } catch (...) {
+        return -1;
+    }
+}
+
 // ─── string helpers ──────────────────────────────────────────────────────────
 
 static std::string sLower(std::string s) {
@@ -296,6 +308,7 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "display") {
         std::string v = sLower(val);
         out.displayNone = (v == "none");
+        out.displayBlock = (v == "block");
         out.displayFlex = (v == "flex" || v == "inline-flex" || v == "grid" || v == "inline-grid");
     } else if (prop == "margin") {
         std::istringstream vs(val); std::vector<float> v;
@@ -386,7 +399,9 @@ static void ApplyDeclaration(const std::string& prop,
             else { try { float n = std::stof(val); if (n > 0) out.lineHeight = n * 16.f; } catch (...) {} }
         }
     } else if (prop == "width") {
-        float f = ParseLength(val); if (f >= 0) out.width = f;
+        float pct = ParsePercentage(val);
+        if (pct >= 0) out.widthPercent = pct;
+        else { float f = ParseLength(val); if (f >= 0) out.width = f; }
     } else if (prop == "height") {
         float f = ParseLength(val); if (f >= 0) out.height = f;
     } else if (prop == "max-width") {
@@ -401,6 +416,33 @@ static void ApplyDeclaration(const std::string& prop,
         if      (v == "center") out.textAlign = 1;
         else if (v == "right")  out.textAlign = 2;
         else                    out.textAlign = 0;
+    } else if (prop == "float") {
+        std::string v = sLower(sTrim(val));
+        if      (v == "left")  out.floatMode = 1;
+        else if (v == "right") out.floatMode = 2;
+        else                   out.floatMode = 0;
+    } else if (prop == "clear") {
+        std::string v = sLower(sTrim(val));
+        if      (v == "left")  out.clearMode = 1;
+        else if (v == "right") out.clearMode = 2;
+        else if (v == "both")  out.clearMode = 3;
+        else                   out.clearMode = 0;
+    } else if (prop == "position") {
+        std::string v = sLower(sTrim(val));
+        if      (v == "relative") out.positionMode = 1;
+        else if (v == "absolute") out.positionMode = 2;
+        else if (v == "fixed")    out.positionMode = 3;
+        else                      out.positionMode = 0;
+    } else if (prop == "overflow" || prop == "overflow-x" || prop == "overflow-y") {
+        out.overflowHidden = (sLower(sTrim(val)) == "hidden");
+    } else if (prop == "top") {
+        float f = ParseLength(val); if (f >= 0) out.top = f;
+    } else if (prop == "right") {
+        float f = ParseLength(val); if (f >= 0) out.right = f;
+    } else if (prop == "bottom") {
+        float f = ParseLength(val); if (f >= 0) out.bottom = f;
+    } else if (prop == "left") {
+        float f = ParseLength(val); if (f >= 0) out.left = f;
     } else if (prop == "opacity") {
         // not stored separately — could multiply into color alpha
     }
@@ -870,6 +912,7 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.italicSet) out << "italic=" << BoolText(style.italic) << " ";
     if (style.underline) out << "underline=true ";
     if (style.displayNone) out << "display=none ";
+    if (style.displayBlock) out << "display=block ";
     if (style.marginTop    >= 0) out << "marginTop="    << style.marginTop    << " ";
     if (style.marginRight  >= 0) out << "marginRight="  << style.marginRight  << " ";
     if (style.marginBottom >= 0) out << "marginBottom=" << style.marginBottom << " ";
@@ -884,8 +927,22 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.lineHeight   > 0)  out << "lineHeight="   << style.lineHeight   << " ";
     if (style.textAlignSet)      out << "textAlign="    << style.textAlign    << " ";
     if (style.width        >= 0) out << "width="        << style.width        << " ";
+    if (style.widthPercent >= 0) out << "widthPercent=" << style.widthPercent << " ";
     if (style.height       >= 0) out << "height="       << style.height       << " ";
     if (style.maxWidth     >= 0) out << "maxWidth="     << style.maxWidth     << " ";
+    if (style.floatMode == 1)    out << "float=left ";
+    if (style.floatMode == 2)    out << "float=right ";
+    if (style.clearMode == 1)    out << "clear=left ";
+    if (style.clearMode == 2)    out << "clear=right ";
+    if (style.clearMode == 3)    out << "clear=both ";
+    if (style.positionMode == 1) out << "position=relative ";
+    if (style.positionMode == 2) out << "position=absolute ";
+    if (style.positionMode == 3) out << "position=fixed ";
+    if (style.overflowHidden)    out << "overflow=hidden ";
+    if (style.top          >= 0) out << "top="          << style.top          << " ";
+    if (style.right        >= 0) out << "right="        << style.right        << " ";
+    if (style.bottom       >= 0) out << "bottom="       << style.bottom       << " ";
+    if (style.left         >= 0) out << "left="         << style.left         << " ";
     out << "\n";
     return out.str();
 }

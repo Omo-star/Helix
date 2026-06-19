@@ -141,6 +141,7 @@ private:
         IDWriteTextFormat*    fmtOverride   = nullptr;
         const Stylesheet*     sheet         = nullptr;
         float lineHeightMul = 1.45f;
+        float floatBottom   = 0.f;
     };
 
     float WalkNode(const Node* node, PaintCtx& ctx);
