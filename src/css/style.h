@@ -52,10 +52,14 @@ struct ComputedStyle {
     int      clearMode    = 0;       // 0=none, 1=left, 2=right, 3=both
     int      positionMode = 0;       // 0=static, 1=relative, 2=absolute, 3=fixed
     bool     overflowHidden = false;
-    float    top          = -1;
-    float    right        = -1;
-    float    bottom       = -1;
-    float    left         = -1;
+    float    top          = 0;
+    float    right        = 0;
+    float    bottom       = 0;
+    float    left         = 0;
+    bool     topSet       = false;
+    bool     rightSet     = false;
+    bool     bottomSet    = false;
+    bool     leftSet      = false;
     // Flex (very simplified)
     bool     displayFlex  = false;
 
@@ -97,10 +101,10 @@ struct ComputedStyle {
         if (child.clearMode    != 0) out.clearMode = child.clearMode;
         if (child.positionMode != 0) out.positionMode = child.positionMode;
         if (child.overflowHidden) out.overflowHidden = true;
-        if (child.top          >= 0) out.top    = child.top;
-        if (child.right        >= 0) out.right  = child.right;
-        if (child.bottom       >= 0) out.bottom = child.bottom;
-        if (child.left         >= 0) out.left   = child.left;
+        if (child.topSet)    { out.top    = child.top;    out.topSet    = true; }
+        if (child.rightSet)  { out.right  = child.right;  out.rightSet  = true; }
+        if (child.bottomSet) { out.bottom = child.bottom; out.bottomSet = true; }
+        if (child.leftSet)   { out.left   = child.left;   out.leftSet   = true; }
         return out;
     }
 };

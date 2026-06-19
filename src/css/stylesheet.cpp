@@ -159,6 +159,7 @@ CssColor ParseCssColor(const std::string& raw) {
     std::string s = sLower(sTrim(raw));
     CssColor out;
     if (s.empty() || s == "inherit" || s == "initial") return out;
+    if (s == "transparent") return {true, 0, 0, 0, 0};
 
     auto& nm = namedColors();
     auto it = nm.find(s);
@@ -208,7 +209,7 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "background-color") {
         out.bgColor = ParseCssColor(val);
     } else if (prop == "background") {
-        // background shorthand: try as color first, then look for url()
+        // background shorthand: extract url() and color from compound values
         std::string low = sLower(val);
         if (low.find("url(") != std::string::npos) {
             size_t us = low.find("url("), ue = val.find(')', us + 4);
@@ -216,9 +217,37 @@ static void ApplyDeclaration(const std::string& prop,
                 std::string url = sTrim(val.substr(us + 4, ue - us - 4));
                 out.backgroundImage = stripQuotes(url);
             }
-        } else {
-            CssColor c = ParseCssColor(val);
-            if (c.valid) out.bgColor = c;
+        }
+        // Try each whitespace-separated token as a color (skip url(...) tokens)
+        {
+            size_t i = 0;
+            while (i < val.size()) {
+                while (i < val.size() && std::isspace((unsigned char)val[i])) i++;
+                if (i >= val.size()) break;
+                // Skip url(...)
+                if (i + 4 <= val.size() && sLower(val.substr(i, 4)) == "url(") {
+                    int depth = 1; i += 4;
+                    while (i < val.size() && depth > 0) {
+                        if (val[i] == '(') depth++;
+                        else if (val[i] == ')') depth--;
+                        i++;
+                    }
+                    continue;
+                }
+                size_t j = i;
+                while (j < val.size() && !std::isspace((unsigned char)val[j])) j++;
+                std::string tok = val.substr(i, j - i);
+                // Skip positional/repeat keywords
+                std::string tl = sLower(tok);
+                if (tl != "no-repeat" && tl != "repeat" && tl != "center"
+                 && tl != "top" && tl != "bottom" && tl != "left" && tl != "right"
+                 && tl != "cover" && tl != "contain" && tl != "fixed" && tl != "scroll"
+                 && tl != "none") {
+                    CssColor c = ParseCssColor(tok);
+                    if (c.valid) { out.bgColor = c; break; }
+                }
+                i = j;
+            }
         }
     } else if (prop == "background-image") {
         std::string low = sLower(val);
@@ -436,13 +465,21 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "overflow" || prop == "overflow-x" || prop == "overflow-y") {
         out.overflowHidden = (sLower(sTrim(val)) == "hidden");
     } else if (prop == "top") {
-        float f = ParseLength(val); if (f >= 0) out.top = f;
+        std::string v = sLower(sTrim(val));
+        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
+            { out.top = ParseLength(val); out.topSet = true; }
     } else if (prop == "right") {
-        float f = ParseLength(val); if (f >= 0) out.right = f;
+        std::string v = sLower(sTrim(val));
+        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
+            { out.right = ParseLength(val); out.rightSet = true; }
     } else if (prop == "bottom") {
-        float f = ParseLength(val); if (f >= 0) out.bottom = f;
+        std::string v = sLower(sTrim(val));
+        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
+            { out.bottom = ParseLength(val); out.bottomSet = true; }
     } else if (prop == "left") {
-        float f = ParseLength(val); if (f >= 0) out.left = f;
+        std::string v = sLower(sTrim(val));
+        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
+            { out.left = ParseLength(val); out.leftSet = true; }
     } else if (prop == "opacity") {
         // not stored separately — could multiply into color alpha
     }
@@ -856,9 +893,46 @@ Stylesheet ParseStylesheet(const std::string& rawCss) {
 
     size_t pos = 0;
     while (pos < css.size()) {
+        // Skip whitespace
+        while (pos < css.size() && std::isspace((unsigned char)css[pos])) pos++;
+        if (pos >= css.size()) break;
+
+        // Skip @-rules — they either end with ; or contain nested {} blocks
+        if (css[pos] == '@') {
+            size_t semiPos = css.find(';', pos);
+            size_t lbPos   = css.find('{', pos);
+            if (semiPos != std::string::npos
+                && (lbPos == std::string::npos || semiPos < lbPos)) {
+                // Statement @-rule (@charset, @import, @namespace)
+                pos = semiPos + 1;
+            } else if (lbPos != std::string::npos) {
+                // Block @-rule (@media, @keyframes, @supports, @font-face)
+                // Skip to the matching closing brace, counting nesting depth
+                pos = lbPos + 1;
+                int depth = 1;
+                while (pos < css.size() && depth > 0) {
+                    if (css[pos] == '{') depth++;
+                    else if (css[pos] == '}') depth--;
+                    pos++;
+                }
+            } else {
+                break;
+            }
+            continue;
+        }
+
         // Find next '{'
         size_t lbrace = css.find('{', pos);
         if (lbrace == std::string::npos) break;
+
+        // If another '@' appears before this '{', restart loop to handle it
+        size_t atPos = css.find('@', pos);
+        if (atPos != std::string::npos && atPos < lbrace) {
+            pos = atPos;
+            continue;
+        }
+
+        // Find the matching closing brace (single-depth, normal rule)
         size_t rbrace = css.find('}', lbrace);
         if (rbrace == std::string::npos) break;
 
@@ -939,10 +1013,10 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.positionMode == 2) out << "position=absolute ";
     if (style.positionMode == 3) out << "position=fixed ";
     if (style.overflowHidden)    out << "overflow=hidden ";
-    if (style.top          >= 0) out << "top="          << style.top          << " ";
-    if (style.right        >= 0) out << "right="        << style.right        << " ";
-    if (style.bottom       >= 0) out << "bottom="       << style.bottom       << " ";
-    if (style.left         >= 0) out << "left="         << style.left         << " ";
+    if (style.topSet)    out << "top="    << style.top    << " ";
+    if (style.rightSet)  out << "right="  << style.right  << " ";
+    if (style.bottomSet) out << "bottom=" << style.bottom << " ";
+    if (style.leftSet)   out << "left="   << style.left   << " ";
     out << "\n";
     return out.str();
 }

@@ -583,6 +583,12 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
     ComputedStyle cs;
     if (ctx.sheet) cs = ctx.sheet->resolve(node);
     if (cs.displayNone) return ctx.y;
+    if (!ctx.dryRun) {
+        std::string id = node->attr("id");
+        if (!id.empty() && !m_anchorY.count(id)) m_anchorY[id] = ctx.y;
+        std::string name = node->attr("name");
+        if (!name.empty() && !m_anchorY.count(name)) m_anchorY[name] = ctx.y;
+    }
 
     // Save & apply inherited style properties
     auto* prevColor   = ctx.colorOverride;
@@ -969,13 +975,24 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         bool autoCenter = (cs.marginLeft <= -1.5f && cs.marginRight <= -1.5f && maxw >= 0 && innerW < prevW);
         if (autoCenter) mLeft = (prevW - innerW - (bw+pLeft) - (bw+pRight)) * 0.5f;
 
+        float explicitH = cs.height >= 0 ? cs.height * m_zoom : -1.f;
+
         float outerW = innerW + (bw + pLeft) + (bw + pRight);
         float boxLeft = prevX + mLeft;
         if (isFloat && cs.floatMode == 2) boxLeft = prevX + std::max(0.f, prevW - outerW);
         if (outOfFlow) {
-            if (cs.left >= 0) boxLeft = cs.left * m_zoom;
-            if (cs.top >= 0) {
-                boxStartY = cs.top * m_zoom;
+            // Position relative to nearest positioned ancestor (containing block)
+            if (cs.leftSet)
+                boxLeft = ctx.containingBlockX + cs.left * m_zoom;
+            else if (cs.rightSet)
+                boxLeft = ctx.containingBlockX + ctx.containingBlockW
+                        - outerW - cs.right * m_zoom;
+            if (cs.topSet) {
+                boxStartY = ctx.containingBlockY + cs.top * m_zoom;
+                ctx.y = boxStartY;
+            } else if (cs.bottomSet && explicitH >= 0) {
+                // bottom + known height → compute top
+                boxStartY = ctx.containingBlockY - cs.bottom * m_zoom - explicitH - pTop - pBot - 2*bw;
                 ctx.y = boxStartY;
             }
         }
@@ -985,14 +1002,34 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         ctx.contentW = innerW;
         ctx.y       += bw + pTop;
 
-        // If background is set and we're not in a dry run:
-        // do a cheap dry-run pass first to know the box height, draw bg, then real pass.
-        if (cs.bgColor.valid && isBlock && !ctx.dryRun) {
-            PaintCtx dry = ctx;
-            dry.dryRun = true;
-            for (auto& c : node->children) WalkNode(c.get(), dry);
-            float dryEndY = dry.y + pBot + bw;
+        // Save/update containing block for positioned children
+        float prevCBX = ctx.containingBlockX;
+        float prevCBY = ctx.containingBlockY;
+        float prevCBW = ctx.containingBlockW;
+        if (cs.positionMode != 0 && notRoot) {
+            ctx.containingBlockX = ctx.x;
+            ctx.containingBlockY = ctx.y;
+            ctx.containingBlockW = innerW;
+        }
 
+        // Dry-run to get box height for background painting and overflow clipping.
+        // absMaxY tracks the bottom edge of out-of-flow children (they don't advance y).
+        float dryEndY = ctx.y;
+        if ((cs.bgColor.valid || cs.overflowHidden) && isBlock && !ctx.dryRun) {
+            PaintCtx dry = ctx;
+            dry.dryRun   = true;
+            dry.absMaxY  = ctx.y;
+            for (auto& c : node->children) WalkNode(c.get(), dry);
+            // Use the larger of: normal-flow extent OR absolute-children extent
+            dryEndY = std::max(dry.y, dry.absMaxY) + pBot + bw;
+            if (explicitH >= 0) {
+                float minEnd = boxStartY + bw + pTop + explicitH + pBot + bw;
+                if (dryEndY < minEnd) dryEndY = minEnd;
+            }
+        }
+
+        // Draw background
+        if (cs.bgColor.valid && isBlock && !ctx.dryRun) {
             float sy = boxStartY - ctx.scrollY + ctx.topInset;
             float ey = dryEndY   - ctx.scrollY + ctx.topInset;
             if (ey > ctx.topInset && sy < ctx.winH && m_rt) {
@@ -1013,10 +1050,41 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
             }
         }
 
+        // overflow:hidden clip — only when explicit height is set.
+        // Without explicit height the container's CSS height = normal-flow children only,
+        // so absolutely positioned children would extend beyond it and be wrongly clipped.
+        bool didClip = false;
+        if (cs.overflowHidden && explicitH >= 0 && !ctx.dryRun && m_rt) {
+            float clipSy = (boxStartY + bw + pTop) - ctx.scrollY + ctx.topInset;
+            float clipEy = clipSy + explicitH * m_zoom;
+            float clipSx = boxLeft;
+            float clipEx = boxLeft + outerW;
+            if (clipEy > clipSy && clipEx > clipSx) {
+                m_rt->PushAxisAlignedClip(
+                    D2D1::RectF(clipSx, clipSy, clipEx, clipEy),
+                    D2D1_ANTIALIAS_MODE_ALIASED);
+                didClip = true;
+            }
+        }
+
         // Real children pass
         walkChildren();
+
+        if (didClip) m_rt->PopAxisAlignedClip();
+
+        // Enforce minimum height from explicit height property
+        if (explicitH >= 0) {
+            float minEnd = boxStartY + bw + pTop + explicitH;
+            if (ctx.y < minEnd) ctx.y = minEnd;
+        }
+
         ctx.y += pBot + bw;
         float boxEndY = ctx.y;
+
+        // Restore containing block
+        ctx.containingBlockX = prevCBX;
+        ctx.containingBlockY = prevCBY;
+        ctx.containingBlockW = prevCBW;
 
         // Border
         if (bw > 0 && !ctx.dryRun && m_rt) {
@@ -1040,6 +1108,8 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
             ctx.floatBottom = std::max(ctx.floatBottom, boxEndY + mBot);
             ctx.y = flowStartY;
         } else if (outOfFlow) {
+            // Let parent dry-run know how far this positioned child reached
+            ctx.absMaxY = std::max(ctx.absMaxY, boxEndY + mBot);
             ctx.y = flowStartY;
         } else {
             if (ctx.floatBottom > ctx.y) ctx.y = ctx.floatBottom;
@@ -1078,6 +1148,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
     for (auto* f : m_tempFormats) if (f) f->Release();
     m_tempFormats.clear();
     m_hits.clear();
+    m_anchorY.clear();
 
     m_rt->BeginDraw();
 
@@ -1088,7 +1159,10 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         pageBg = FindBodyBgColor(doc.get(), sheet);
     }
 
-    D2D1_COLOR_F bgF = pageBg.valid ? ToD2D(pageBg) : D2D1::ColorF(0.99f, 0.99f, 0.99f);
+    // transparent body bg → default white (HwndRenderTarget clear with a=0 shows window black)
+    D2D1_COLOR_F bgF = (pageBg.valid && pageBg.a > 0.001f)
+        ? ToD2D(pageBg)
+        : D2D1::ColorF(1.f, 1.f, 1.f);
     m_rt->Clear(bgF);
 
     // Chrome area (toolbar + tab strip)
@@ -1103,6 +1177,10 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         ctx.y        = 16.f;
         ctx.x        = kMarginX;
         ctx.contentW = std::max(100.f, (float)m_width - kMarginX * 2.f);
+        ctx.containingBlockX = kMarginX;
+        ctx.containingBlockY = 16.f;
+        ctx.containingBlockW = ctx.contentW;
+        ctx.absMaxY          = 0.f;
         ctx.scrollY  = scrollY;
         ctx.winH     = (float)m_height;
         ctx.topInset = topInset;
@@ -1125,4 +1203,11 @@ std::string Renderer::HitTest(float x, float y) const {
          && y >= it->y && y <= it->y + it->h)
             return it->href;
     return {};
+}
+
+bool Renderer::GetAnchorY(const std::string& anchor, float& outY) const {
+    auto it = m_anchorY.find(anchor);
+    if (it == m_anchorY.end()) return false;
+    outY = it->second;
+    return true;
 }

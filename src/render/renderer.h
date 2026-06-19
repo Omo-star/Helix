@@ -40,6 +40,7 @@ public:
     std::string HitTest(float x, float y) const;
     int  HitTestTab(float x, float y) const;
     bool HitTestTabClose(float x, float y, int& outIdx) const;
+    bool GetAnchorY(const std::string& anchor, float& outY) const;
 
     void DiscardTarget();
     void ReceiveImage(const std::string& url, const std::vector<uint8_t>& bytes);
@@ -101,6 +102,7 @@ private:
     UINT  m_height = 600;
 
     std::vector<HitRegion> m_hits;
+    std::map<std::string, float> m_anchorY;
 
     struct TabHit { float x, y, w, h; int idx; bool isClose; };
     std::vector<TabHit> m_tabHits;
@@ -141,7 +143,11 @@ private:
         IDWriteTextFormat*    fmtOverride   = nullptr;
         const Stylesheet*     sheet         = nullptr;
         float lineHeightMul = 1.45f;
-        float floatBottom   = 0.f;
+        float floatBottom       = 0.f;
+        float containingBlockX  = 32.f;   // content-left of nearest positioned ancestor
+        float containingBlockY  = 0.f;    // content-top  of nearest positioned ancestor
+        float containingBlockW  = 700.f;  // content-width of nearest positioned ancestor
+        float absMaxY           = 0.f;    // max bottom-edge of out-of-flow children (dry-run only)
     };
 
     float WalkNode(const Node* node, PaintCtx& ctx);

@@ -47,6 +47,8 @@ struct Tab {
     float                 scrollY  = 0.f;
     float                 docHeight= 600.f;
     bool                  loading  = false;
+    std::string           pendingFragment;
+    bool                  fragmentScrollPending = false;
     std::vector<std::string> history;
     int                   histIdx  = -1;
 };
@@ -271,6 +273,17 @@ static void TabPushHistory(Tab& tab, const std::string& url) {
     tab.histIdx = (int)tab.history.size() - 1;
 }
 
+static std::string UrlFragment(const std::string& url) {
+    size_t hash = url.find('#');
+    if (hash == std::string::npos || hash + 1 >= url.size()) return {};
+    return url.substr(hash + 1);
+}
+
+static std::string UrlWithoutFragment(const std::string& url) {
+    size_t hash = url.find('#');
+    return hash == std::string::npos ? url : url.substr(0, hash);
+}
+
 static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
     if (tabIdx < 0 || tabIdx >= (int)g_tabs.size()) return;
     Tab& tab = g_tabs[tabIdx];
@@ -284,6 +297,8 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         tab.page.reset(new Page{ url, ParseHtml(kHomeHtml), {} });
         tab.title   = "Helix";
         tab.scrollY = 0.f;
+        tab.pendingFragment.clear();
+        tab.fragmentScrollPending = false;
         if (pushHistory) TabPushHistory(tab, url);
         if (tabIdx == g_activeTab) {
             SetUrlBar(url);
@@ -310,6 +325,8 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         tab.page.reset(new Page{ url, ParseHtml(html), {} });
         tab.title   = "History";
         tab.scrollY = 0.f;
+        tab.pendingFragment.clear();
+        tab.fragmentScrollPending = false;
         if (pushHistory) TabPushHistory(tab, url);
         if (tabIdx == g_activeTab) {
             SetUrlBar(url);
@@ -326,6 +343,8 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
     tab.loading = true;
     tab.url     = url;
     tab.title   = "Loading…";
+    tab.pendingFragment = UrlFragment(url);
+    tab.fragmentScrollPending = !tab.pendingFragment.empty();
     if (pushHistory) TabPushHistory(tab, url);
 
     if (tabIdx == g_activeTab) {
@@ -337,10 +356,11 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
     }
 
     HWND hwnd = g_hwnd;
-    std::thread([hwnd, url, tabIdx]() {
+    std::string fetchUrl = UrlWithoutFragment(url);
+    std::thread([hwnd, url, fetchUrl, tabIdx]() {
         auto* p = new Page;
         p->url   = url;
-        auto res = FetchUrl(url);
+        auto res = FetchUrl(fetchUrl);
         if (res.success) {
             p->dom = ParseHtml(res.body);
             if (!res.finalUrl.empty() && res.finalUrl != url)
@@ -553,17 +573,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         BeginPaint(hwnd, &ps);
 
         auto tabs = BuildTabEntries();
-        const Tab& cur = CurTab();
+        Tab& cur = CurTab();
+        bool repaintForFragment = false;
         if (cur.page && cur.page->dom) {
             CurTab().docHeight = g_renderer.Paint(
                 cur.page->dom, cur.scrollY, cur.page->url,
                 (float)TOP_INSET, (float)TAB_H, &tabs);
+            if (cur.fragmentScrollPending) {
+                cur.fragmentScrollPending = false;
+                float anchorY = 0.f;
+                if (!cur.pendingFragment.empty()
+                    && g_renderer.GetAnchorY(cur.pendingFragment, anchorY)) {
+                    cur.scrollY = std::max(0.f, anchorY - 16.f);
+                    ClampScroll();
+                    repaintForFragment = true;
+                }
+            }
         } else {
             g_renderer.Paint(nullptr, 0.f, {},
                 (float)TOP_INSET, (float)TAB_H, &tabs);
         }
         UpdateScrollbar();
         EndPaint(hwnd, &ps);
+        if (repaintForFragment) InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
 
