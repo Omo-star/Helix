@@ -61,6 +61,47 @@ static std::string stripQuotes(std::string s) {
     return s;
 }
 
+static bool IsHexDigit(char c) {
+    return std::isxdigit((unsigned char)c) != 0;
+}
+
+static int HexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return 0;
+}
+
+static std::string CssUnescape(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (c != '\\' || i + 1 >= input.size()) {
+            out += c;
+            continue;
+        }
+
+        size_t j = i + 1;
+        if (IsHexDigit(input[j])) {
+            int value = 0;
+            int count = 0;
+            while (j < input.size() && count < 6 && IsHexDigit(input[j])) {
+                value = value * 16 + HexValue(input[j]);
+                ++j;
+                ++count;
+            }
+            if (j < input.size() && std::isspace((unsigned char)input[j])) ++j;
+            if (value > 0 && value <= 0x7f) out += (char)value;
+            i = j - 1;
+        } else {
+            out += input[j];
+            i = j;
+        }
+    }
+    return out;
+}
+
 // ─── color parsing ───────────────────────────────────────────────────────────
 
 static const std::map<std::string,CssColor>& namedColors() {
@@ -380,14 +421,70 @@ ComputedStyle ParseInlineStyle(const std::string& style) {
 
 // ─── selector matching ───────────────────────────────────────────────────────
 
+static const Node* PreviousElementSibling(const Node* node);
+static const Node* NextElementSibling(const Node* node);
+
+static bool MatchesPseudoClass(const std::string& pseudo, const Node* node) {
+    if (pseudo == "first-child") return PreviousElementSibling(node) == nullptr;
+    if (pseudo == "last-child") return NextElementSibling(node) == nullptr;
+    if (pseudo == "only-child") return PreviousElementSibling(node) == nullptr
+                                      && NextElementSibling(node) == nullptr;
+    if (pseudo == "empty") return node && node->children.empty();
+    if (pseudo == "link") return node && node->tagName == "a"
+                              && node->attrs.find("href") != node->attrs.end();
+    if (pseudo == "root") return node && node->parent
+                              && node->parent->type == NodeType::Document;
+    return false;
+}
+
 static bool MatchesSimpleSelector(const CssSelectorPart& part, const Node* node) {
     if (!node || node->type != NodeType::Element) return false;
+    if (part.neverMatch) return false;
     if (!part.tag.empty() && node->tagName != part.tag) return false;
     if (!part.id.empty() && node->attr("id") != part.id) return false;
     if (!part.attrName.empty()) {
         std::string value = node->attr(part.attrName);
         if (value.empty() && node->attrs.find(part.attrName) == node->attrs.end()) return false;
-        if (part.attrHasValue && value != part.attrValue) return false;
+        if (part.attrHasValue) {
+            bool matches = false;
+            switch (part.attrMatch) {
+                case CssAttrMatch::Exact:
+                    matches = (value == part.attrValue);
+                    break;
+                case CssAttrMatch::Includes: {
+                    std::istringstream ss(value);
+                    std::string token;
+                    while (ss >> token) {
+                        if (token == part.attrValue) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                    break;
+                }
+                case CssAttrMatch::DashPrefix:
+                    matches = (value == part.attrValue)
+                           || (value.size() > part.attrValue.size()
+                            && value.compare(0, part.attrValue.size(), part.attrValue) == 0
+                            && value[part.attrValue.size()] == '-');
+                    break;
+                case CssAttrMatch::Prefix:
+                    matches = value.size() >= part.attrValue.size()
+                           && value.compare(0, part.attrValue.size(), part.attrValue) == 0;
+                    break;
+                case CssAttrMatch::Suffix:
+                    matches = value.size() >= part.attrValue.size()
+                           && value.compare(value.size() - part.attrValue.size(), part.attrValue.size(), part.attrValue) == 0;
+                    break;
+                case CssAttrMatch::Substring:
+                    matches = value.find(part.attrValue) != std::string::npos;
+                    break;
+                case CssAttrMatch::Exists:
+                    matches = true;
+                    break;
+            }
+            if (!matches) return false;
+        }
     }
     if (!part.cls.empty()) {
         auto ca = node->attr("class");
@@ -396,6 +493,9 @@ static bool MatchesSimpleSelector(const CssSelectorPart& part, const Node* node)
         std::string tok;
         while (ss >> tok) if (tok == part.cls) { found = true; break; }
         if (!found) return false;
+    }
+    for (const auto& pseudo : part.pseudos) {
+        if (!MatchesPseudoClass(pseudo, node)) return false;
     }
     return true;
 }
@@ -406,6 +506,19 @@ static const Node* PreviousElementSibling(const Node* node) {
     for (const auto& child : node->parent->children) {
         if (child.get() == node) return previous;
         if (child->type == NodeType::Element) previous = child.get();
+    }
+    return nullptr;
+}
+
+static const Node* NextElementSibling(const Node* node) {
+    if (!node || !node->parent) return nullptr;
+    bool seenCurrent = false;
+    for (const auto& child : node->parent->children) {
+        if (child.get() == node) {
+            seenCurrent = true;
+            continue;
+        }
+        if (seenCurrent && child->type == NodeType::Element) return child.get();
     }
     return nullptr;
 }
@@ -520,9 +633,10 @@ static CssSelectorPart parseSimpleSelectorPart(const std::string& sel) {
     char mode = 't'; // t=tag, c=class, i=id
     auto flush = [&]() {
         if (cur.empty()) return;
-        if (mode == 't') part.tag = sLower(cur);
-        if (mode == 'c') part.cls = cur;
-        if (mode == 'i') part.id  = cur;
+        std::string ident = CssUnescape(cur);
+        if (mode == 't') part.tag = sLower(ident);
+        if (mode == 'c') part.cls = ident;
+        if (mode == 'i') part.id  = ident;
         cur.clear();
     };
     for (size_t i = 0; i < sel.size(); ++i) {
@@ -534,18 +648,82 @@ static CssSelectorPart parseSimpleSelectorPart(const std::string& sel) {
             size_t end = sel.find(']', i + 1);
             if (end == std::string::npos) break;
             std::string body = sTrim(sel.substr(i + 1, end - i - 1));
-            size_t eq = body.find('=');
-            if (eq == std::string::npos) {
-                part.attrName = sLower(body);
+            size_t opPos = std::string::npos;
+            std::string op;
+            for (const std::string candidate : { "~=", "|=", "^=", "$=", "*=", "=" }) {
+                opPos = body.find(candidate);
+                if (opPos != std::string::npos) {
+                    op = candidate;
+                    break;
+                }
+            }
+            if (opPos == std::string::npos) {
+                part.attrName = sLower(CssUnescape(sTrim(body)));
                 part.attrHasValue = false;
+                part.attrMatch = CssAttrMatch::Exists;
             } else {
-                part.attrName = sLower(sTrim(body.substr(0, eq)));
-                part.attrValue = stripQuotes(body.substr(eq + 1));
+                part.attrName = sLower(CssUnescape(sTrim(body.substr(0, opPos))));
+                part.attrValue = CssUnescape(stripQuotes(body.substr(opPos + op.size())));
                 part.attrHasValue = true;
+                if (op == "~=") part.attrMatch = CssAttrMatch::Includes;
+                else if (op == "|=") part.attrMatch = CssAttrMatch::DashPrefix;
+                else if (op == "^=") part.attrMatch = CssAttrMatch::Prefix;
+                else if (op == "$=") part.attrMatch = CssAttrMatch::Suffix;
+                else if (op == "*=") part.attrMatch = CssAttrMatch::Substring;
+                else part.attrMatch = CssAttrMatch::Exact;
             }
             i = end;
         }
-        else if (c == ':') break; // skip pseudo-classes
+        else if (c == ':') {
+            flush();
+            if (i + 1 < sel.size() && sel[i + 1] == ':') {
+                part.neverMatch = true;
+                break;
+            }
+
+            size_t nameStart = i + 1;
+            size_t j = nameStart;
+            while (j < sel.size()
+                && (std::isalnum((unsigned char)sel[j]) || sel[j] == '-' || sel[j] == '_')) {
+                ++j;
+            }
+
+            std::string pseudo = sLower(CssUnescape(sel.substr(nameStart, j - nameStart)));
+            if (j < sel.size() && sel[j] == '(') {
+                int depth = 1;
+                ++j;
+                bool escapedArg = false;
+                char quoteArg = 0;
+                while (j < sel.size() && depth > 0) {
+                    char pc = sel[j];
+                    if (escapedArg) {
+                        escapedArg = false;
+                    } else if (pc == '\\') {
+                        escapedArg = true;
+                    } else if (quoteArg) {
+                        if (pc == quoteArg) quoteArg = 0;
+                    } else if (pc == '"' || pc == '\'') {
+                        quoteArg = pc;
+                    } else if (pc == '(') {
+                        ++depth;
+                    } else if (pc == ')') {
+                        --depth;
+                    }
+                    ++j;
+                }
+                part.neverMatch = true;
+                i = j - 1;
+            } else {
+                if (pseudo == "first-child" || pseudo == "last-child"
+                    || pseudo == "only-child" || pseudo == "empty"
+                    || pseudo == "link" || pseudo == "root") {
+                    part.pseudos.push_back(pseudo);
+                } else {
+                    part.neverMatch = true;
+                }
+                i = j - 1;
+            }
+        }
         else cur += c;
     }
     flush();
@@ -555,31 +733,66 @@ static CssSelectorPart parseSimpleSelectorPart(const std::string& sel) {
 }
 
 static std::vector<CssSelectorPart> parseSelectorChain(std::string selector) {
-    std::string spaced;
-    spaced.reserve(selector.size() + 4);
-    for (char c : selector) {
-        if (c == '>' || c == '+') {
-            spaced += ' ';
-            spaced += c;
-            spaced += ' ';
-        }
-        else spaced += c;
-    }
-
     std::vector<CssSelectorPart> parts;
-    std::istringstream ss(spaced);
     std::string tok;
     char nextCombinator = 0;
-    while (ss >> tok) {
-        if (tok == ">" || tok == "+") {
-            nextCombinator = tok[0];
-            continue;
-        }
+    int bracketDepth = 0;
+    char quote = 0;
+    bool escaped = false;
+
+    auto flushToken = [&]() {
+        if (tok.empty()) return;
         CssSelectorPart part = parseSimpleSelectorPart(tok);
         part.combinator = parts.empty() ? 0 : (nextCombinator ? nextCombinator : ' ');
         parts.push_back(part);
-        nextCombinator = ' ';
+        tok.clear();
+        nextCombinator = 0;
+    };
+
+    for (char c : selector) {
+        if (escaped) {
+            tok += c;
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            tok += c;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            tok += c;
+            if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            tok += c;
+            quote = c;
+            continue;
+        }
+        if (c == '[') {
+            ++bracketDepth;
+            tok += c;
+            continue;
+        }
+        if (c == ']') {
+            if (bracketDepth > 0) --bracketDepth;
+            tok += c;
+            continue;
+        }
+        if (bracketDepth == 0 && (c == '>' || c == '+')) {
+            flushToken();
+            nextCombinator = c;
+            continue;
+        }
+        if (bracketDepth == 0 && std::isspace((unsigned char)c)) {
+            flushToken();
+            if (!parts.empty() && nextCombinator == 0) nextCombinator = ' ';
+            continue;
+        }
+        tok += c;
     }
+    flushToken();
     return parts;
 }
 

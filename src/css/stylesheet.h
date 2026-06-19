@@ -4,6 +4,16 @@
 #include <vector>
 #include <string>
 
+enum class CssAttrMatch {
+    Exists,
+    Exact,
+    Includes,
+    DashPrefix,
+    Prefix,
+    Suffix,
+    Substring
+};
+
 struct CssSelectorPart {
     std::string tag;       // "" = any
     std::string cls;       // "" = any
@@ -11,6 +21,9 @@ struct CssSelectorPart {
     std::string attrName;  // "" = no attribute selector
     std::string attrValue; // only used when attrHasValue = true
     bool attrHasValue = false;
+    CssAttrMatch attrMatch = CssAttrMatch::Exists;
+    std::vector<std::string> pseudos;
+    bool neverMatch = false;
     char combinator = 0;   // 0 = first part, ' ' = descendant, '>' = child, '+' = adjacent sibling
 };
 

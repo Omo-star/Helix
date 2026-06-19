@@ -65,7 +65,15 @@ TestResult RunCssTests() {
         auto dom = ParseHtml(html);
         auto sheet = ParseStylesheet(css);
         std::string actual;
-        for (const std::string id : { "ready", "busy", "div-ready", "missing" }) {
+        for (const std::string id : {
+            "ready", "busy", "div-ready", "missing",
+            "token-hit", "token-miss",
+            "dash-hit", "dash-exact", "dash-miss",
+            "prefix-hit", "prefix-miss",
+            "suffix-hit", "suffix-miss",
+            "substring-hit", "substring-miss",
+            "escaped-class"
+        }) {
             auto* node = FindElementById(dom.get(), id);
             actual += id + ": ";
             actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
@@ -86,6 +94,25 @@ TestResult RunCssTests() {
             actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
         }
         ExpectEqual("css/cascade/adjacent-sibling", actual, expected, result);
+    }
+
+    {
+        auto html = ReadTextFile(root / "tests/fixtures/css/cascade/pseudo-classes.in.html");
+        auto css = ReadTextFile(root / "tests/fixtures/css/cascade/pseudo-classes.in.css");
+        auto expected = ReadTextFile(root / "tests/fixtures/css/cascade/pseudo-classes.expected.txt");
+        auto dom = ParseHtml(html);
+        auto sheet = ParseStylesheet(css);
+        std::string actual;
+        for (const std::string id : {
+            "first", "middle", "last", "only",
+            "empty", "not-empty",
+            "link", "not-link", "hover-target"
+        }) {
+            auto* node = FindElementById(dom.get(), id);
+            actual += id + ": ";
+            actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        }
+        ExpectEqual("css/cascade/pseudo-classes", actual, expected, result);
     }
 
     return result;
