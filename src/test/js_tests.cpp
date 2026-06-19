@@ -1,11 +1,13 @@
 #include "test/fixture.h"
 
 #include "js/compiler.h"
+#include "js/engine.h"
 #include "js/gc.h"
 #include "js/lexer.h"
 #include "js/parser.h"
 #include "js/runtime.h"
 #include "js/vm.h"
+#include "html/parser.h"
 
 #include <sstream>
 #include <string>
@@ -51,6 +53,14 @@ static void ExpectJsResult(
     }
 }
 
+static std::string RunEngineDomRegistrationSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><p id=\"target\">Hello</p></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript("var el = document.getElementById('target');\n", "dom-registration");
+    return ok ? "registered\n" : "script failed\n";
+}
+
 TestResult RunJsTests() {
     TestResult result;
 
@@ -75,6 +85,12 @@ TestResult RunJsTests() {
         "[1, 2, 3].forEach(function (value) { total += value; });\n"
         "__result = total;\n",
         "number: 6\n",
+        result);
+
+    ExpectEqual(
+        "js/engine/dom-registration-does-not-recurse",
+        RunEngineDomRegistrationSnapshot(),
+        "registered\n",
         result);
 
     return result;

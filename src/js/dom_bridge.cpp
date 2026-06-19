@@ -20,6 +20,7 @@ static void addNative(VM& vm, JsObject* obj, const std::string& name, NativeFn f
 // This is safe because the VM and document share the same lifetime.
 
 static std::unordered_map<Node*, std::shared_ptr<Node>> g_nodeStore;
+static std::unordered_map<Node*, JsObject*> g_wrapperStore;
 
 static std::shared_ptr<Node> getShared(Node* raw) {
     auto it = g_nodeStore.find(raw);
@@ -95,8 +96,15 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
     Node* raw = node.get();
     g_nodeStore[raw] = node;
 
+    auto cached = g_wrapperStore.find(raw);
+    if (cached != g_wrapperStore.end()) return JsValue::object(cached->second);
+
     auto* obj = vm.gc().newObject(ObjKind::DomWrapper);
     obj->domNode = raw;
+    g_wrapperStore[raw] = obj;
+
+    JsValue objValue = JsValue::object(obj);
+    vm.gc().addRoot(&objValue);
 
     // ── Core properties ──
 
@@ -443,7 +451,8 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
     obj->setProp("type",    vm.str(node->attr("type")));
     obj->setProp("name",    vm.str(node->attr("name")));
 
-    return JsValue::object(obj);
+    vm.gc().removeRoot(&objValue);
+    return objValue;
 }
 
 // ── registerDom ───────────────────────────────────────────────────────────────
@@ -451,6 +460,7 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
 void registerDom(VM& vm, std::shared_ptr<Node> docNode,
                  std::function<void()> onRepaint) {
     vm.onDomDirty = onRepaint;
+    g_wrapperStore.clear();
 
     JsValue docVal = wrapNode(vm, docNode);
     vm.setGlobal("document", docVal);
