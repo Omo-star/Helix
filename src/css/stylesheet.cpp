@@ -73,6 +73,41 @@ static std::string stripQuotes(std::string s) {
     return s;
 }
 
+static bool IsUnitlessNumber(const std::string& raw) {
+    std::string s = sTrim(raw);
+    if (s.empty()) return false;
+    size_t i = 0;
+    if (s[i] == '-' || s[i] == '+') ++i;
+    bool digit = false;
+    bool dot = false;
+    for (; i < s.size(); ++i) {
+        char c = s[i];
+        if (std::isdigit((unsigned char)c)) {
+            digit = true;
+            continue;
+        }
+        if (c == '.' && !dot) {
+            dot = true;
+            continue;
+        }
+        return false;
+    }
+    return digit;
+}
+
+static float ParseLineHeightValue(const std::string& raw, float baseFontSize) {
+    std::string v = sLower(sTrim(raw));
+    if (v.empty() || v == "normal" || v == "inherit" || v == "initial" || v == "unset")
+        return 0;
+    float pct = ParsePercentage(v);
+    if (pct >= 0) return baseFontSize * (pct / 100.f);
+    if (IsUnitlessNumber(v)) {
+        try { return std::stof(v) * baseFontSize; } catch (...) { return 0; }
+    }
+    float length = ParseLength(v);
+    return length > 0 ? length : 0;
+}
+
 static bool IsHexDigit(char c) {
     return std::isxdigit((unsigned char)c) != 0;
 }
@@ -355,9 +390,8 @@ static void ApplyDeclaration(const std::string& prop,
                 if (sz > 0) {
                     out.fontSize = sz;
                     if (slash != std::string::npos) {
-                        float lh = 0;
-                        try { lh = std::stof(low.substr(slash + 1)); } catch (...) {}
-                        if (lh > 0) out.lineHeight = lh * sz;
+                        float lh = ParseLineHeightValue(low.substr(slash + 1), sz);
+                        if (lh > 0) out.lineHeight = lh;
                     }
                     // rest of string is font family
                     std::string rest;
@@ -468,14 +502,8 @@ static void ApplyDeclaration(const std::string& prop,
         while (vs >> tok) { float f = ParseLength(tok); if (f >= 0) { out.borderWidth = f; break; } }
 
     } else if (prop == "line-height") {
-        std::string v = sLower(sTrim(val));
-        if (v == "normal") out.lineHeight = 0;
-        else {
-            // Could be unitless multiplier like "1.5" or "1.5em"
-            float f = ParseLength(val);
-            if (f > 0) out.lineHeight = f;
-            else { try { float n = std::stof(val); if (n > 0) out.lineHeight = n * 16.f; } catch (...) {} }
-        }
+        float lh = ParseLineHeightValue(val, out.fontSize > 0 ? out.fontSize : 16.f);
+        if (lh > 0) out.lineHeight = lh;
     } else if (prop == "width") {
         float pct = ParsePercentage(val);
         if (pct >= 0) out.widthPercent = pct;

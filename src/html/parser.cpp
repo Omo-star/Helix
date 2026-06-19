@@ -15,6 +15,12 @@ static const std::set<std::string> kAutoClose = {
     "colgroup","option","optgroup"
 };
 
+static const std::set<std::string> kClosesParagraph = {
+    "address","article","aside","blockquote","div","dl","fieldset",
+    "footer","form","h1","h2","h3","h4","h5","h6","header","hr",
+    "main","nav","ol","p","pre","section","table","ul"
+};
+
 std::shared_ptr<Node> ParseHtml(const std::string& html) {
     auto doc = Node::makeDocument();
 
@@ -29,6 +35,14 @@ std::shared_ptr<Node> ParseHtml(const std::string& html) {
         switch (t.type) {
 
         case TokenType::StartTag: {
+            // HTML permits omitted </p> before many block/table starts.
+            // Acid2 relies on <table> closing <p> before the face markup.
+            if (kClosesParagraph.count(t.name) && stack.size() > 1) {
+                if (stack.back()->tagName == "p") {
+                    stack.pop_back();
+                }
+            }
+
             // Auto-close peer elements (e.g. <p> closes previous <p>)
             if (kAutoClose.count(t.name) && stack.size() > 1) {
                 if (stack.back()->tagName == t.name) {

@@ -145,5 +145,16 @@ TestResult RunCssTests() {
             result);
     }
 
+    {
+        auto dom = ParseHtml("<html><body><h2 id=\"top\">Hello World!</h2></body></html>");
+        auto sheet = ParseStylesheet("#top { font: 2em/24px sans-serif; }");
+        auto* node = FindElementById(dom.get(), "top");
+        std::string actual = node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        ExpectEqual("css/cascade/font-shorthand-absolute-line-height",
+            actual,
+            "fontSize=32 lineHeight=24 \n",
+            result);
+    }
+
     return result;
 }

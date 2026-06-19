@@ -43,5 +43,25 @@ TestResult RunHtmlTests() {
     RunDomFixture("rawtext-style", result);
     RunDomFixture("autoclose-paragraphs", result);
 
+    {
+        std::string actual = SerializeDom(ParseHtml(
+            "<html><body><div class=\"picture\"><p><table><tr><td></table>"
+            "<p class=\"bad\"><blockquote class=\"first one\"></blockquote>"
+            "<div class=\"forehead\"></div></div></body></html>"));
+        std::string expected =
+            "#document\n"
+            "  <html>\n"
+            "    <body>\n"
+            "      <div class=\"picture\">\n"
+            "        <p>\n"
+            "        <table>\n"
+            "          <tr>\n"
+            "            <td>\n"
+            "        <p class=\"bad\">\n"
+            "        <blockquote class=\"first one\">\n"
+            "        <div class=\"forehead\">\n";
+        ExpectEqual("html/dom/p-closed-by-block-starts", actual, expected, result);
+    }
+
     return result;
 }
