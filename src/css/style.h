@@ -12,6 +12,8 @@ struct ComputedStyle {
     CssColor    bgColor;
     std::string fontFamily;          // "" = default
     std::string backgroundImage;     // URL from background-image: url(...)
+    bool     bgColorSet   = false;
+    bool     backgroundImageSet = false;
     float    fontSize     = 0;
     bool     bold         = false;
     bool     boldSet      = false;
@@ -66,9 +68,12 @@ struct ComputedStyle {
     ComputedStyle inherit(const ComputedStyle& child) const {
         ComputedStyle out = *this;
         if (child.color.valid)       out.color   = child.color;
-        if (child.bgColor.valid)     out.bgColor = child.bgColor;
+        if (child.bgColorSet)       { out.bgColor = child.bgColor; out.bgColorSet = true; }
         if (!child.fontFamily.empty())      out.fontFamily      = child.fontFamily;
-        if (!child.backgroundImage.empty()) out.backgroundImage = child.backgroundImage;
+        if (child.backgroundImageSet) {
+            out.backgroundImage = child.backgroundImage;
+            out.backgroundImageSet = true;
+        }
         if (child.fontSize > 0)      out.fontSize  = child.fontSize;
         if (child.boldSet)   { out.bold = child.bold; out.boldSet = true; }
         if (child.italicSet) { out.italic = child.italic; out.italicSet = true; }

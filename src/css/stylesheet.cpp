@@ -292,9 +292,14 @@ static void ApplyDeclaration(const std::string& prop,
         out.color = ParseCssColor(val);
     } else if (prop == "background-color") {
         out.bgColor = ParseCssColor(val);
+        out.bgColorSet = true;
     } else if (prop == "background") {
         // background shorthand: extract url() and color from compound values
         std::string low = sLower(val);
+        out.bgColor = {};
+        out.bgColorSet = true;
+        out.backgroundImage.clear();
+        out.backgroundImageSet = true;
         if (low.find("url(") != std::string::npos) {
             size_t us = low.find("url("), ue = val.find(')', us + 4);
             if (ue != std::string::npos) {
@@ -335,6 +340,8 @@ static void ApplyDeclaration(const std::string& prop,
         }
     } else if (prop == "background-image") {
         std::string low = sLower(val);
+        out.backgroundImage.clear();
+        out.backgroundImageSet = true;
         if (low.find("url(") != std::string::npos) {
             size_t us = low.find("url("), ue = val.find(')', us + 4);
             if (ue != std::string::npos) {

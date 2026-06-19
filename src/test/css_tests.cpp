@@ -156,5 +156,16 @@ TestResult RunCssTests() {
             result);
     }
 
+    {
+        auto dom = ParseHtml("<html><body><div class=\"picture\"></div></body></html>");
+        auto sheet = ParseStylesheet(".picture { background: red; } .picture { background: none; }");
+        auto* node = FindFirstElement(dom.get(), "div");
+        std::string actual = node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        ExpectEqual("css/cascade/background-none-clears-background",
+            actual,
+            "\n",
+            result);
+    }
+
     return result;
 }
