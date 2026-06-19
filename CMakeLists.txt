@@ -50,6 +50,7 @@ add_executable(helix-tests
     src/test/layout_tests.cpp
     src/test/paint_tests.cpp
     src/test/js_tests.cpp
+    src/test/network_tests.cpp
 )
 
 target_include_directories(helix-tests PRIVATE src)

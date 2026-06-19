@@ -10,12 +10,38 @@
 #include <functional>
 #include <cmath>
 #include <cwchar>
+#include <cctype>
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 static D2D1_COLOR_F ToD2D(const CssColor& c) { return { c.r, c.g, c.b, c.a }; }
 static constexpr float kMarginX = 32.f;
 static constexpr float kMarginY =  8.f;
+
+static bool HasUrlScheme(const std::string& url) {
+    size_t colon = url.find(':');
+    if (colon == std::string::npos || colon == 0) return false;
+    size_t stop = url.find_first_of("/?#");
+    if (stop != std::string::npos && stop < colon) return false;
+    for (size_t i = 0; i < colon; ++i) {
+        char c = url[i];
+        if (!std::isalnum((unsigned char)c) && c != '+' && c != '-' && c != '.')
+            return false;
+    }
+    return true;
+}
+
+static bool LooksLikeImageUrl(const std::string& url) {
+    std::string low;
+    for (char c : url) low += (char)std::tolower((unsigned char)c);
+    return low.rfind("data:image/", 0) == 0
+        || low.find(".png") != std::string::npos
+        || low.find(".jpg") != std::string::npos
+        || low.find(".jpeg") != std::string::npos
+        || low.find(".gif") != std::string::npos
+        || low.find(".webp") != std::string::npos
+        || low.find(".bmp") != std::string::npos;
+}
 
 std::wstring Renderer::ToWide(const std::string& s) {
     if (s.empty()) return {};
@@ -27,7 +53,7 @@ std::wstring Renderer::ToWide(const std::string& s) {
 
 std::string Renderer::ResolveUrl(const std::string& href, const std::string& base) {
     if (href.empty()) return base;
-    if (href.find("://") != std::string::npos) return href;
+    if (HasUrlScheme(href)) return href;
     if (href.size() >= 2 && href[0] == '/' && href[1] == '/')
         return "https:" + href;
     if (href[0] == '/') {
@@ -695,6 +721,32 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         goto restore;
     }
 
+    if (tag == "object") {
+        std::string data = ResolveUrl(node->attr("data"), ctx.baseUrl);
+        if (!data.empty() && LooksLikeImageUrl(data)) {
+            auto it = m_images.find(data);
+            if (it != m_images.end() && it->second) {
+                D2D1_SIZE_F bmpSz = it->second->GetSize();
+                float dw = cs.width >= 0 ? cs.width * m_zoom : bmpSz.width;
+                float dh = cs.height >= 0 ? cs.height * m_zoom : bmpSz.height;
+                if (dw <= 0) dw = bmpSz.width;
+                if (dh <= 0) dh = bmpSz.height;
+                if (!ctx.dryRun && m_rt) {
+                    float sy = ctx.y - ctx.scrollY + ctx.topInset;
+                    if (sy + dh >= ctx.topInset && sy < ctx.winH) {
+                        m_rt->DrawBitmap(it->second,
+                            D2D1::RectF(ctx.x, sy, ctx.x + dw, sy + dh));
+                    }
+                }
+                ctx.y += dh + kMarginY;
+            } else if (!m_loadingImages.count(data)) {
+                m_loadingImages.insert(data);
+                if (m_imageRequestCb) m_imageRequestCb(data);
+            }
+            goto restore;
+        }
+    }
+
     // ── skip non-visual elements ──────────────────────────────────────────
     if (tag == "head"     || tag == "script"   || tag == "style"
      || tag == "noscript" || tag == "svg"      || tag == "canvas"
@@ -1015,7 +1067,7 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         // Dry-run to get box height for background painting and overflow clipping.
         // absMaxY tracks the bottom edge of out-of-flow children (they don't advance y).
         float dryEndY = ctx.y;
-        if ((cs.bgColor.valid || cs.overflowHidden) && isBlock && !ctx.dryRun) {
+        if ((cs.bgColor.valid || !cs.backgroundImage.empty() || cs.overflowHidden) && isBlock && !ctx.dryRun) {
             PaintCtx dry = ctx;
             dry.dryRun   = true;
             dry.absMaxY  = ctx.y;
@@ -1053,6 +1105,31 @@ float Renderer::WalkNode(const Node* node, PaintCtx& ctx) {
         // overflow:hidden clip — only when explicit height is set.
         // Without explicit height the container's CSS height = normal-flow children only,
         // so absolutely positioned children would extend beyond it and be wrongly clipped.
+        if (!cs.backgroundImage.empty() && isBlock && !ctx.dryRun) {
+            std::string bgUrl = ResolveUrl(cs.backgroundImage, ctx.baseUrl);
+            auto it = m_images.find(bgUrl);
+            if (it != m_images.end() && it->second && m_rt) {
+                float sy = boxStartY - ctx.scrollY + ctx.topInset;
+                float ey = dryEndY   - ctx.scrollY + ctx.topInset;
+                if (ey > ctx.topInset && sy < ctx.winH) {
+                    D2D1_RECT_F rect = D2D1::RectF(boxLeft, sy, boxLeft + outerW, ey);
+                    ID2D1BitmapBrush* brush = nullptr;
+                    D2D1_BITMAP_BRUSH_PROPERTIES props =
+                        D2D1::BitmapBrushProperties(
+                            D2D1_EXTEND_MODE_WRAP,
+                            D2D1_EXTEND_MODE_WRAP,
+                            D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+                    if (SUCCEEDED(m_rt->CreateBitmapBrush(it->second, props, &brush))) {
+                        m_rt->FillRectangle(rect, brush);
+                        brush->Release();
+                    }
+                }
+            } else if (!bgUrl.empty() && !m_loadingImages.count(bgUrl)) {
+                m_loadingImages.insert(bgUrl);
+                if (m_imageRequestCb) m_imageRequestCb(bgUrl);
+            }
+        }
+
         bool didClip = false;
         if (cs.overflowHidden && explicitH >= 0 && !ctx.dryRun && m_rt) {
             float clipSy = (boxStartY + bw + pTop) - ctx.scrollY + ctx.topInset;

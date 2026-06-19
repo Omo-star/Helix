@@ -114,6 +114,55 @@ static std::string CssUnescape(const std::string& input) {
     return out;
 }
 
+static std::vector<std::string> SplitDeclarations(const std::string& block) {
+    std::vector<std::string> out;
+    std::string cur;
+    int parenDepth = 0;
+    char quote = 0;
+    bool escaped = false;
+
+    for (char c : block) {
+        if (escaped) {
+            cur += c;
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            cur += c;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            cur += c;
+            if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            cur += c;
+            quote = c;
+            continue;
+        }
+        if (c == '(') {
+            ++parenDepth;
+            cur += c;
+            continue;
+        }
+        if (c == ')') {
+            if (parenDepth > 0) --parenDepth;
+            cur += c;
+            continue;
+        }
+        if (c == ';' && parenDepth == 0) {
+            out.push_back(cur);
+            cur.clear();
+            continue;
+        }
+        cur += c;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
 // ─── color parsing ───────────────────────────────────────────────────────────
 
 static const std::map<std::string,CssColor>& namedColors() {
@@ -487,9 +536,7 @@ static void ApplyDeclaration(const std::string& prop,
 
 ComputedStyle ParseInlineStyle(const std::string& style) {
     ComputedStyle out;
-    std::istringstream ss(style);
-    std::string decl;
-    while (std::getline(ss, decl, ';')) {
+    for (const auto& decl : SplitDeclarations(style)) {
         size_t colon = decl.find(':');
         if (colon == std::string::npos) continue;
         ApplyDeclaration(sLower(sTrim(decl.substr(0, colon))),
@@ -944,9 +991,7 @@ Stylesheet ParseStylesheet(const std::string& rawCss) {
 
         // Parse declarations once
         ComputedStyle declStyle;
-        std::istringstream ds(declBlock);
-        std::string decl;
-        while (std::getline(ds, decl, ';')) {
+        for (const auto& decl : SplitDeclarations(declBlock)) {
             size_t colon = decl.find(':');
             if (colon == std::string::npos) continue;
             ApplyDeclaration(sLower(sTrim(decl.substr(0, colon))),
@@ -1004,6 +1049,7 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.widthPercent >= 0) out << "widthPercent=" << style.widthPercent << " ";
     if (style.height       >= 0) out << "height="       << style.height       << " ";
     if (style.maxWidth     >= 0) out << "maxWidth="     << style.maxWidth     << " ";
+    if (!style.backgroundImage.empty()) out << "backgroundImage=" << style.backgroundImage << " ";
     if (style.floatMode == 1)    out << "float=left ";
     if (style.floatMode == 2)    out << "float=right ";
     if (style.clearMode == 1)    out << "clear=left ";

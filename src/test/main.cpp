@@ -11,7 +11,7 @@ static int Finish(const TestResult& result) {
 
 int main(int argc, char** argv) {
     if (argc != 2) {
-        std::cout << "Usage: helix-tests <html|css|layout|paint|js>\n";
+        std::cout << "Usage: helix-tests <html|css|layout|paint|js|network>\n";
         return 2;
     }
 
@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
     if (suite == "layout") return Finish(RunLayoutTests());
     if (suite == "paint") return Finish(RunPaintTests());
     if (suite == "js") return Finish(RunJsTests());
+    if (suite == "network") return Finish(RunNetworkTests());
 
     std::cout << "Unknown suite: " << suite << "\n";
     return 2;

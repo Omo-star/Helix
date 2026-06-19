@@ -133,5 +133,17 @@ TestResult RunCssTests() {
             result);
     }
 
+    {
+        auto dom = ParseHtml("<html><body><div id=\"face\"></div></body></html>");
+        auto sheet = ParseStylesheet(
+            "#face { background: red url(data:image/png;base64,QUJDRA%3D%3D); width: 4em; height: 2em; }");
+        auto* node = FindElementById(dom.get(), "face");
+        std::string actual = node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        ExpectEqual("css/cascade/data-uri-background",
+            actual,
+            "bg=1,0,0,1 width=64 height=32 backgroundImage=data:image/png;base64,QUJDRA%3D%3D \n",
+            result);
+    }
+
     return result;
 }
