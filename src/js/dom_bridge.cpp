@@ -37,13 +37,42 @@ Node* unwrapNode(JsValue val) {
 
 static std::string textContent(Node* n) {
     if (!n) return "";
-    if (n->type == NodeType::Text) return n->text;
     std::string s;
-    for (auto& c : n->children) s += textContent(c.get());
+    std::vector<Node*> stack;
+    stack.push_back(n);
+    while (!stack.empty()) {
+        Node* cur = stack.back();
+        stack.pop_back();
+        if (!cur) continue;
+        if (cur->type == NodeType::Text) {
+            s += cur->text;
+            continue;
+        }
+        for (auto it = cur->children.rbegin(); it != cur->children.rend(); ++it)
+            stack.push_back(it->get());
+    }
     return s;
 }
 
 static std::string innerHTML(VM& vm, Node* n);
+static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materializeRelations);
+
+static bool CanEagerSerialize(Node* n) {
+    if (!n) return false;
+    struct Entry { Node* node; int depth; };
+    std::vector<Entry> stack;
+    stack.push_back({ n, 0 });
+    size_t count = 0;
+    while (!stack.empty()) {
+        Entry cur = stack.back();
+        stack.pop_back();
+        if (!cur.node) continue;
+        if (++count > 512 || cur.depth > 64) return false;
+        for (auto& child : cur.node->children)
+            stack.push_back({ child.get(), cur.depth + 1 });
+    }
+    return true;
+}
 
 static std::string outerHTML(VM& vm, Node* n) {
     if (!n) return "";
@@ -89,7 +118,7 @@ static std::vector<std::shared_ptr<Node>> domQueryAll(Node* root, const std::str
 
 // ── wrapNode ─────────────────────────────────────────────────────────────────
 
-JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
+static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materializeRelations) {
     if (!node) return JsValue::null();
 
     // Register in store
@@ -134,8 +163,13 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
     obj->setProp("textContent", vm.str(textContent(raw)));
 
     // ── innerHTML / outerHTML ──
-    obj->setProp("innerHTML", vm.str(innerHTML(vm, raw)));
-    obj->setProp("outerHTML", vm.str(outerHTML(vm, raw)));
+    if (CanEagerSerialize(raw)) {
+        obj->setProp("innerHTML", vm.str(innerHTML(vm, raw)));
+        obj->setProp("outerHTML", vm.str(outerHTML(vm, raw)));
+    } else {
+        obj->setProp("innerHTML", vm.str(""));
+        obj->setProp("outerHTML", vm.str(""));
+    }
 
     // ── attributes map ──
     {
@@ -218,28 +252,32 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
     }
 
     // children / childNodes
-    {
+    if (materializeRelations) {
         auto* children  = vm.gc().newArray();
         auto* childNodes = vm.gc().newArray();
         for (auto& c : node->children) {
-            JsValue wrapped = wrapNode(vm, c);
+            JsValue wrapped = wrapNodeInternal(vm, c, false);
             childNodes->arrayPush(wrapped);
             if (c->type == NodeType::Element) children->arrayPush(wrapped);
         }
         obj->setProp("children",   JsValue::object(children));
         obj->setProp("childNodes", JsValue::object(childNodes));
         obj->setProp("childElementCount", JsValue::integer((int32_t)children->arrayLength()));
+    } else {
+        obj->setProp("children", JsValue::object(vm.gc().newArray()));
+        obj->setProp("childNodes", JsValue::object(vm.gc().newArray()));
+        obj->setProp("childElementCount", JsValue::integer(0));
     }
 
     // firstChild / lastChild / firstElementChild / lastElementChild
-    if (!node->children.empty()) {
-        obj->setProp("firstChild", wrapNode(vm, node->children.front()));
-        obj->setProp("lastChild",  wrapNode(vm, node->children.back()));
+    if (materializeRelations && !node->children.empty()) {
+        obj->setProp("firstChild", wrapNodeInternal(vm, node->children.front(), false));
+        obj->setProp("lastChild",  wrapNodeInternal(vm, node->children.back(), false));
         for (auto& c : node->children) {
-            if (c->type == NodeType::Element) { obj->setProp("firstElementChild", wrapNode(vm, c)); break; }
+            if (c->type == NodeType::Element) { obj->setProp("firstElementChild", wrapNodeInternal(vm, c, false)); break; }
         }
         for (int i = (int)node->children.size()-1; i >= 0; i--) {
-            if (node->children[i]->type == NodeType::Element) { obj->setProp("lastElementChild", wrapNode(vm, node->children[i])); break; }
+            if (node->children[i]->type == NodeType::Element) { obj->setProp("lastElementChild", wrapNodeInternal(vm, node->children[i], false)); break; }
         }
     } else {
         obj->setProp("firstChild",        JsValue::null());
@@ -249,10 +287,10 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
     }
 
     // parentNode / parentElement
-    if (node->parent) {
+    if (materializeRelations && node->parent) {
         auto parentShared = getShared(node->parent);
         if (parentShared) {
-            JsValue parentWrapped = wrapNode(vm, parentShared);
+            JsValue parentWrapped = wrapNodeInternal(vm, parentShared, false);
             obj->setProp("parentNode",    parentWrapped);
             obj->setProp("parentElement", parentWrapped);
         }
@@ -453,6 +491,10 @@ JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
 
     vm.gc().removeRoot(&objValue);
     return objValue;
+}
+
+JsValue wrapNode(VM& vm, std::shared_ptr<Node> node) {
+    return wrapNodeInternal(vm, std::move(node), true);
 }
 
 // ── registerDom ───────────────────────────────────────────────────────────────

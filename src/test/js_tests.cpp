@@ -61,6 +61,24 @@ static std::string RunEngineDomRegistrationSnapshot() {
     return ok ? "registered\n" : "script failed\n";
 }
 
+static std::string RunEngineDeepDomRegistrationSnapshot() {
+    std::string html = "<html><body>";
+    for (int i = 0; i < 1600; ++i) {
+        html += "<div>";
+    }
+    html += "leaf";
+    for (int i = 0; i < 1600; ++i) {
+        html += "</div>";
+    }
+    html += "</body></html>";
+
+    JsEngine engine;
+    auto dom = ParseHtml(html);
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript("var body = document.body;\n", "deep-dom-registration");
+    return ok ? "registered\n" : "script failed\n";
+}
+
 TestResult RunJsTests() {
     TestResult result;
 
@@ -90,6 +108,12 @@ TestResult RunJsTests() {
     ExpectEqual(
         "js/engine/dom-registration-does-not-recurse",
         RunEngineDomRegistrationSnapshot(),
+        "registered\n",
+        result);
+
+    ExpectEqual(
+        "js/engine/deep-dom-registration-does-not-overflow",
+        RunEngineDeepDomRegistrationSnapshot(),
         "registered\n",
         result);
 

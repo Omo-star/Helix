@@ -516,21 +516,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // Run <script> tags in the loaded page
         if (idx >= 0 && idx < (int)g_tabs.size() && g_tabs[idx].page && g_tabs[idx].page->dom) {
-            auto repaint = [hwnd]() { InvalidateRect(hwnd, NULL, FALSE); };
-            g_js.setDocument(g_tabs[idx].page->dom, repaint);
-            std::function<void(const Node*)> runScripts = [&](const Node* n) {
-                if (!n) return;
-                if (n->type == NodeType::Element && n->tagName == "script") {
-                    std::string src;
-                    for (auto& c : n->children)
-                        if (c->type == NodeType::Text) src += c->text;
-                    if (!src.empty()) g_js.runScript(src, "inline");
+            try {
+                auto repaint = [hwnd]() { InvalidateRect(hwnd, NULL, FALSE); };
+                g_js.setDocument(g_tabs[idx].page->dom, repaint);
+                std::vector<const Node*> stack;
+                stack.push_back(g_tabs[idx].page->dom.get());
+                size_t scriptCount = 0;
+                size_t totalScriptBytes = 0;
+                while (!stack.empty()) {
+                    const Node* n = stack.back();
+                    stack.pop_back();
+                    if (!n) continue;
+                    if (n->type == NodeType::Element && n->tagName == "script") {
+                        std::string src;
+                        for (auto& c : n->children)
+                            if (c->type == NodeType::Text) src += c->text;
+                        totalScriptBytes += src.size();
+                        if (!src.empty() && scriptCount < 128 && totalScriptBytes <= 256 * 1024) {
+                            g_js.runScript(src, "inline");
+                        }
+                        ++scriptCount;
+                    }
+                    for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
+                        stack.push_back(it->get());
                 }
-                for (auto& c : n->children) runScripts(c.get());
-            };
-            runScripts(g_tabs[idx].page->dom.get());
-            // Set up timer for macrotasks / setTimeout
-            SetTimer(hwnd, 1, 16, NULL);
+                // Set up timer for macrotasks / setTimeout
+                SetTimer(hwnd, 1, 16, NULL);
+            } catch (...) {
+                OutputDebugStringA("[JS] Page script setup failed; continuing without page scripts\n");
+            }
         }
 
         InvalidateRect(hwnd, NULL, FALSE);
@@ -631,7 +645,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_TIMER:
-        g_js.runMacrotasks();
+        try {
+            g_js.runMacrotasks();
+        } catch (...) {
+            OutputDebugStringA("[JS] Macrotask pump failed; timer stopped\n");
+            KillTimer(hwnd, 1);
+        }
         return 0;
 
     case WM_ERASEBKGND:

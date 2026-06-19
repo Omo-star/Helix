@@ -30,6 +30,7 @@ JsEngine::JsEngine() : m_impl(std::make_unique<Impl>()) {}
 JsEngine::~JsEngine() = default;
 
 void JsEngine::setDocument(std::shared_ptr<Node> doc, std::function<void()> onRepaint) {
+    m_impl = std::make_unique<Impl>();
     registerDom(m_impl->vm, std::move(doc), std::move(onRepaint));
 }
 
