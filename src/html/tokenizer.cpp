@@ -1,11 +1,44 @@
 #include "html/tokenizer.h"
 #include <cctype>
+#include <map>
 #include <stdexcept>
 #include <set>
 
 static std::string toLower(std::string s) {
     for (auto& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
+}
+
+static std::string utf8(unsigned long cp) {
+    std::string out;
+    if (cp < 0x80) {
+        out += (char)cp;
+    } else if (cp < 0x800) {
+        out += (char)(0xC0 | (cp >> 6));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char)(0xE0 | (cp >> 12));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        out += (char)(0xF0 | (cp >> 18));
+        out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+    return out;
+}
+
+static const std::map<std::string, unsigned long>& namedEntities() {
+    static const std::map<std::string, unsigned long> entities = {
+        {"amp", 38}, {"lt", 60}, {"gt", 62}, {"quot", 34}, {"apos", 39}, {"nbsp", 32},
+        {"mdash", 0x2014}, {"ndash", 0x2013}, {"bull", 0x2022}, {"hellip", 0x2026},
+        {"raquo", 0x00BB}, {"laquo", 0x00AB},
+        {"rsquo", 0x2019}, {"lsquo", 0x2018}, {"rdquo", 0x201D}, {"ldquo", 0x201C},
+        {"copy", 0x00A9}, {"reg", 0x00AE}, {"trade", 0x2122},
+        {"times", 0x00D7}, {"divide", 0x00F7}, {"middot", 0x00B7}
+    };
+    return entities;
 }
 
 char HtmlTokenizer::peek(int off) const {
@@ -45,12 +78,11 @@ std::string HtmlTokenizer::decodeEntities(const std::string& raw) {
         size_t semi = raw.find(';', i + 1);
         if (semi == std::string::npos) { out += raw[i++]; continue; }
         std::string ent = raw.substr(i + 1, semi - i - 1);
-        if      (ent == "amp")  { out += '&';  i = semi + 1; }
-        else if (ent == "lt")   { out += '<';  i = semi + 1; }
-        else if (ent == "gt")   { out += '>';  i = semi + 1; }
-        else if (ent == "quot") { out += '"';  i = semi + 1; }
-        else if (ent == "apos") { out += '\''; i = semi + 1; }
-        else if (ent == "nbsp") { out += ' ';  i = semi + 1; }
+        auto named = namedEntities().find(ent);
+        if (named != namedEntities().end()) {
+            out += utf8(named->second);
+            i = semi + 1;
+        }
         else if (!ent.empty() && ent[0] == '#') {
             unsigned long cp = 0;
             try {
@@ -70,16 +102,7 @@ std::string HtmlTokenizer::decodeEntities(const std::string& raw) {
                 i = semi + 1;
                 continue;
             }
-            // Encode as UTF-8
-            if (cp < 0x80)       out += (char)cp;
-            else if (cp < 0x800) { out += (char)(0xC0|(cp>>6)); out += (char)(0x80|(cp&0x3F)); }
-            else if (cp < 0x10000) { out += (char)(0xE0|(cp>>12)); out += (char)(0x80|((cp>>6)&0x3F)); out += (char)(0x80|(cp&0x3F)); }
-            else {
-                out += (char)(0xF0|(cp>>18));
-                out += (char)(0x80|((cp>>12)&0x3F));
-                out += (char)(0x80|((cp>>6)&0x3F));
-                out += (char)(0x80|(cp&0x3F));
-            }
+            out += utf8(cp);
             i = semi + 1;
         } else { out += raw[i++]; }
     }

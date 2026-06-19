@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include <algorithm>
+#include <cctype>
 
 // ─── control IDs ─────────────────────────────────────────────────────────────
 enum : int { IDC_BACK = 101, IDC_FWRD, IDC_REFR, IDC_STOP, IDC_HOME, IDC_URL, IDC_FIND };
@@ -92,6 +93,10 @@ static std::string ToUtf8(const std::wstring& w) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
     return s;
 }
+static std::string LowerAscii(std::string s) {
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
 static void SetUrlBar(const std::string& url) {
     SetWindowTextW(g_hwndUrl, ToWide(url).c_str());
 }
@@ -101,7 +106,86 @@ static void SetStatus(const std::string& s) {
 static void UpdateTitle() {
     std::wstring t = ToWide(CurTab().title);
     if (t.empty()) t = L"New Tab";
-    SetWindowTextW(g_hwnd, (t + L" — Helix").c_str());
+    SetWindowTextW(g_hwnd, (t + L" \x2014 Helix").c_str());
+}
+
+static std::string ResolveResourceUrl(const std::string& href, const std::string& base) {
+    if (href.empty()) return {};
+    if (href.find("://") != std::string::npos) return href;
+    if (href.size() >= 2 && href[0] == '/' && href[1] == '/') return "https:" + href;
+    if (href[0] == '/') {
+        size_t p = base.find("://");
+        if (p == std::string::npos) return href;
+        size_t slash = base.find('/', p + 3);
+        return (slash == std::string::npos ? base : base.substr(0, slash)) + href;
+    }
+    size_t last = base.rfind('/');
+    return (last == std::string::npos ? base + "/" : base.substr(0, last + 1)) + href;
+}
+
+static bool AttrContainsToken(const std::string& value, const std::string& token) {
+    std::string lower = LowerAscii(value);
+    size_t start = 0;
+    while (start < lower.size()) {
+        while (start < lower.size() && std::isspace((unsigned char)lower[start])) ++start;
+        size_t end = start;
+        while (end < lower.size() && !std::isspace((unsigned char)lower[end])) ++end;
+        if (lower.substr(start, end - start) == token) return true;
+        start = end;
+    }
+    return false;
+}
+
+static bool StylesheetMediaApplies(const std::string& media) {
+    std::string lower = LowerAscii(media);
+    if (lower.empty()) return true;
+    return lower.find("all") != std::string::npos
+        || lower.find("screen") != std::string::npos
+        || lower.find("projection") != std::string::npos;
+}
+
+static Node* FindFirstElement(Node* root, const std::string& tag) {
+    if (!root) return nullptr;
+    std::vector<Node*> stack{ root };
+    while (!stack.empty()) {
+        Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == NodeType::Element && n->tagName == tag) return n;
+        for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
+            stack.push_back(it->get());
+    }
+    return nullptr;
+}
+
+static void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std::string& pageUrl) {
+    if (!dom) return;
+    Node* attach = FindFirstElement(dom.get(), "head");
+    if (!attach) attach = dom.get();
+
+    std::vector<Node*> stack{ dom.get() };
+    int loaded = 0;
+    size_t loadedBytes = 0;
+    while (!stack.empty() && loaded < 8 && loadedBytes < 512 * 1024) {
+        Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == NodeType::Element && n->tagName == "link"
+            && AttrContainsToken(n->attr("rel"), "stylesheet")
+            && StylesheetMediaApplies(n->attr("media"))) {
+            std::string href = ResolveResourceUrl(n->attr("href"), pageUrl);
+            auto res = FetchUrl(href);
+            if (res.success && !res.body.empty()) {
+                loadedBytes += res.body.size();
+                if (loadedBytes <= 512 * 1024) {
+                    auto style = Node::makeElement("style");
+                    style->appendChild(Node::makeText(res.body));
+                    attach->appendChild(style);
+                    ++loaded;
+                }
+            }
+        }
+        for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
+            stack.push_back(it->get());
+    }
 }
 
 // ─── scrollbar ───────────────────────────────────────────────────────────────
@@ -261,6 +345,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
             p->dom = ParseHtml(res.body);
             if (!res.finalUrl.empty() && res.finalUrl != url)
                 p->url = res.finalUrl;
+            LoadExternalStylesheets(p->dom, p->url);
         } else {
             p->error = res.error;
         }
@@ -412,11 +497,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return CreateWindowW(L"BUTTON", t, WS_CHILD | WS_VISIBLE,
                 0,0,0,0, hwnd, (HMENU)(intptr_t)id, hi, NULL);
         };
-        g_hwndBack = btn(L"←", IDC_BACK);
-        g_hwndFwrd = btn(L"→", IDC_FWRD);
-        g_hwndRefr = btn(L"↻", IDC_REFR);
-        g_hwndStop = btn(L"✕", IDC_STOP);
-        g_hwndHome = btn(L"⌂", IDC_HOME);
+        g_hwndBack = btn(L"\x2190", IDC_BACK);
+        g_hwndFwrd = btn(L"\x2192", IDC_FWRD);
+        g_hwndRefr = btn(L"\x21BB", IDC_REFR);
+        g_hwndStop = btn(L"\x2715", IDC_STOP);
+        g_hwndHome = btn(L"\x2302", IDC_HOME);
 
         g_hwndUrl = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
