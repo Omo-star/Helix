@@ -3,6 +3,7 @@
 
 struct FetchResult {
     bool        success = false;
+    int         status  = 0;       // HTTP status code (0 if not applicable)
     std::string finalUrl;
     std::string body;
     std::string contentType;

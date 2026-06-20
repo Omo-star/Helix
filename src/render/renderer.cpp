@@ -285,6 +285,11 @@ void Renderer::ReceiveImage(const std::string& url, const std::vector<uint8_t>& 
                 auto it = m_images.find(url);
                 if (it != m_images.end() && it->second) it->second->Release();
                 m_images[url] = bmp;
+                // The layout tree was built before this image's intrinsic size
+                // was known (replaced boxes got 0×0 and painted invisibly).
+                // Drop the cached tree so the next paint re-lays-out with the
+                // real dimensions, otherwise loaded images never appear.
+                InvalidateLayout();
             }
         }
         conv->Release();

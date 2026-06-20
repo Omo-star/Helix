@@ -101,8 +101,10 @@ FetchResult FetchUrl(const std::string& url) {
         return r;
     }
 
+    // A descriptive User-Agent is required by several hosts (Wikimedia returns
+    // HTTP 429 to generic/empty agents).
     HINTERNET hNet = InternetOpenA(
-        "Helix/0.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Helix/0.1 (+https://github.com/helix-browser)",
         INTERNET_OPEN_TYPE_PRECONFIG,
         nullptr, nullptr, 0);
     if (!hNet) { r.error = "InternetOpen failed"; return r; }
@@ -126,6 +128,13 @@ FetchResult FetchUrl(const std::string& url) {
     HttpQueryInfoA(hReq, HTTP_QUERY_LOCATION, finalUrl, &len, nullptr);
     r.finalUrl = *finalUrl ? std::string(finalUrl) : url;
 
+    // HTTP status code: don't treat 4xx/5xx error pages as a successful body
+    // (otherwise a 429 rate-limit page gets handed to the image decoder).
+    DWORD status = 0;
+    DWORD statusLen = sizeof(status);
+    HttpQueryInfoA(hReq, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                   &status, &statusLen, nullptr);
+
     // Content-Type header
     char ct[256] = {};
     len = (DWORD)sizeof(ct);
@@ -140,6 +149,13 @@ FetchResult FetchUrl(const std::string& url) {
 
     InternetCloseHandle(hReq);
     InternetCloseHandle(hNet);
-    r.success = true;
+    r.status = (int)status;
+    if (status >= 400) {
+        r.success = false;
+        r.error = "HTTP " + std::to_string(status);
+        r.body.clear();
+    } else {
+        r.success = true;
+    }
     return r;
 }
