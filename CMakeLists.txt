@@ -54,6 +54,13 @@ target_link_libraries(Helix PRIVATE
     helix_engine d2d1 dwrite windowscodecs wininet comctl32 ole32
 )
 
+# Reserve a large stack (64 MB). Real pages can drive the JS engine and DOM
+# registration into very deep recursion; the default 1 MB stack overflows and
+# crashes (a stack overflow cannot be caught by C++ exception handling).
+if (MSVC)
+    target_link_options(Helix PRIVATE /STACK:67108864)
+endif()
+
 add_executable(helix-tests
     src/test/main.cpp
     src/test/fixture.cpp

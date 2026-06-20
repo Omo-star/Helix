@@ -154,10 +154,40 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
         return m_hrBrush;
     };
     float ex = sx + bw, ey = sy + bh;
-    if (box.borderTop > 0)    if (auto* b = side(s.borderTopColor))    m_rt->FillRectangle(D2D1::RectF(sx, sy, ex, sy + box.borderTop), b);
-    if (box.borderBottom > 0) if (auto* b = side(s.borderBottomColor)) m_rt->FillRectangle(D2D1::RectF(sx, ey - box.borderBottom, ex, ey), b);
-    if (box.borderLeft > 0)   if (auto* b = side(s.borderLeftColor))   m_rt->FillRectangle(D2D1::RectF(sx, sy, sx + box.borderLeft, ey), b);
-    if (box.borderRight > 0)  if (auto* b = side(s.borderRightColor))  m_rt->FillRectangle(D2D1::RectF(ex - box.borderRight, sy, ex, ey), b);
+    int sideCount = (box.borderTop > 0) + (box.borderBottom > 0) + (box.borderLeft > 0) + (box.borderRight > 0);
+    bool degenerate = (box.contentW <= 1.f || box.contentH <= 1.f) && sideCount >= 2;
+
+    if (degenerate && m_factory) {
+        // CSS borders meet at 45° miters. When the content box is ~zero, the
+        // borders form triangles instead of strips — this is how border tricks
+        // draw triangles/arrows (Acid2's nose, CSS tooltips, dropdown carets).
+        D2D1_POINT_2F tl = {sx, sy}, tr = {ex, sy}, br = {ex, ey}, bl = {sx, ey};
+        D2D1_POINT_2F ci = {sx + box.borderLeft, sy + box.borderTop};
+        D2D1_POINT_2F co = {ex - box.borderRight, ey - box.borderBottom};
+        auto tri = [&](D2D1_POINT_2F a, D2D1_POINT_2F b, D2D1_POINT_2F c, ID2D1SolidColorBrush* br2) {
+            if (!br2) return;
+            ID2D1PathGeometry* geo = nullptr; ID2D1GeometrySink* sink = nullptr;
+            if (FAILED(m_factory->CreatePathGeometry(&geo)) || !geo) return;
+            if (SUCCEEDED(geo->Open(&sink)) && sink) {
+                sink->BeginFigure(a, D2D1_FIGURE_BEGIN_FILLED);
+                D2D1_POINT_2F pts[2] = { b, c };
+                sink->AddLines(pts, 2);
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink->Close(); sink->Release();
+                m_rt->FillGeometry(geo, br2);
+            }
+            geo->Release();
+        };
+        if (box.borderTop > 0)    tri(tl, tr, ci, side(s.borderTopColor));
+        if (box.borderRight > 0)  tri(tr, br, co, side(s.borderRightColor));
+        if (box.borderBottom > 0) tri(br, bl, co, side(s.borderBottomColor));
+        if (box.borderLeft > 0)   tri(bl, tl, ci, side(s.borderLeftColor));
+    } else {
+        if (box.borderTop > 0)    if (auto* b = side(s.borderTopColor))    m_rt->FillRectangle(D2D1::RectF(sx, sy, ex, sy + box.borderTop), b);
+        if (box.borderBottom > 0) if (auto* b = side(s.borderBottomColor)) m_rt->FillRectangle(D2D1::RectF(sx, ey - box.borderBottom, ex, ey), b);
+        if (box.borderLeft > 0)   if (auto* b = side(s.borderLeftColor))   m_rt->FillRectangle(D2D1::RectF(sx, sy, sx + box.borderLeft, ey), b);
+        if (box.borderRight > 0)  if (auto* b = side(s.borderRightColor))  m_rt->FillRectangle(D2D1::RectF(ex - box.borderRight, sy, ex, ey), b);
+    }
 
     // List-item marker.
     if (box.kind == BoxKind::ListItem && !(s.listStyleSet && s.listStyleNone)) {
