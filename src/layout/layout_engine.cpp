@@ -508,6 +508,7 @@ struct Engine {
 
     // ── forward decls ────────────────────────────────────────────────────────
     void layoutBlockChildren(LayoutBox& box, std::vector<LayoutBox*>& positionedOut);
+    void layoutTable(LayoutBox& box);
     float layoutInline(LayoutBox& box, struct FloatCtx* fctx);
     void layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
                    std::vector<LayoutBox*>& positionedOut, struct FloatCtx* parentFloats,
@@ -629,6 +630,16 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         return;
     }
 
+    // Tables lay out specially: cells in rows, shrink-to-fit overall width.
+    if (box.kind == BoxKind::Table) {
+        layoutTable(box);
+        float eh = usedHeight(s, cbH);
+        if (eh >= 0) box.contentH = eh;
+        if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, px(s.maxHeight));
+        if (s.minHeight >= 0) box.contentH = std::max(box.contentH, px(s.minHeight));
+        return;
+    }
+
     // Establish inline formatting context or block formatting.
     float explicitH = usedHeight(s, cbH);
 
@@ -745,6 +756,58 @@ void Engine::layoutBlockChildren(LayoutBox& box, std::vector<LayoutBox*>& positi
     float contentBottom = cursorY + prevMarginBottom;
     contentBottom = std::max(contentBottom, fctx.lowestBottom());
     box.contentH = std::max(0.f, contentBottom - box.contentY());
+}
+
+// ─── table layout (simplified) ───────────────────────────────────────────────
+// Lays out cells in rows side-by-side and stacks rows; the table shrinks to fit
+// its content. Direct cell children (no <tr>) form an implicit row — this is
+// what Acid2's display:table <ul> needs, and matches CSS anonymous-row boxes.
+void Engine::layoutTable(LayoutBox& box) {
+    DepthScope _d; if (g_depth > kMaxDepth) return;
+    float x0 = box.contentX();
+    float y  = box.contentY();
+    float spacing = box.style.borderSpacing >= 0 ? px(box.style.borderSpacing) : 0;
+
+    std::vector<std::vector<LayoutBox*>> rows;
+    std::vector<LayoutBox*> implicit;
+    for (auto& k : box.kids) {
+        if (k->isOutOfFlow()) continue;
+        bool isRow = k->kind == BoxKind::TableRow || k->style.isDisplayTableRow()
+                  || k->style.isDisplayTableRowGroup();
+        if (isRow) {
+            if (!implicit.empty()) { rows.push_back(implicit); implicit.clear(); }
+            std::vector<LayoutBox*> cells;
+            for (auto& c : k->kids) if (!c->isOutOfFlow()) cells.push_back(c.get());
+            rows.push_back(cells);
+            k->x = x0; k->y = y;  // row spans the table; geometry filled loosely
+        } else {
+            implicit.push_back(k.get());
+        }
+    }
+    if (!implicit.empty()) rows.push_back(implicit);
+
+    float tableW = 0;
+    for (auto& row : rows) {
+        float x = x0 + spacing;
+        float rowH = 0;
+        for (auto* cell : row) {
+            std::vector<LayoutBox*> pos;
+            cell->y = y + spacing;
+            // Explicit width honoured by layoutBox; auto width shrinks to fit.
+            layoutBox(*cell, x, box.contentW, -1.f, pos, nullptr, /*shrinkToFit=*/true);
+            rowH = std::max(rowH, cell->borderBoxH());
+            x += cell->marginBoxW() + spacing;
+        }
+        // Stretch cells to the row height.
+        for (auto* cell : row) {
+            float extra = rowH - cell->borderBoxH();
+            if (extra > 0) cell->contentH += extra;
+        }
+        y += rowH + spacing;
+        tableW = std::max(tableW, x - x0);
+    }
+    box.contentW = std::max(0.f, tableW);
+    box.contentH = std::max(0.f, y - box.contentY());
 }
 
 // ─── inline layout ───────────────────────────────────────────────────────────

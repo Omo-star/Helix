@@ -4,6 +4,15 @@ project(Helix VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use /EHa everywhere so catch(...) also catches structured exceptions
+# (access violations etc.) — a faulting page must never kill the browser.
+# Strip the default /EHsc first so it doesn't override /EHa on any target.
+if (MSVC)
+    string(REGEX REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REGEX REPLACE "/EHs" ""  CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    add_compile_options(/EHa)
+endif()
+
 add_library(helix_engine STATIC
     src/network/fetcher.cpp
     src/network/url.cpp
@@ -62,6 +71,10 @@ target_link_libraries(helix-tests PRIVATE
     helix_engine wininet
 )
 
-set_target_properties(Helix helix-tests PROPERTIES
+add_executable(dump_layout tools/dump_layout.cpp)
+target_include_directories(dump_layout PRIVATE src)
+target_link_libraries(dump_layout PRIVATE helix_engine wininet)
+
+set_target_properties(Helix helix-tests dump_layout PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
 )

@@ -307,51 +307,60 @@ static void ApplyDeclaration(const std::string& prop,
         out.bgColor = ParseCssColor(val);
         out.bgColorSet = true;
     } else if (prop == "background") {
-        // background shorthand: extract url() and color from compound values
+        // background shorthand: extract url() and color from compound values.
+        // Parse into locals first; if the value is invalid (e.g. two colors
+        // like "red pink") drop the whole declaration per CSS error handling.
         std::string low = sLower(val);
-        out.bgColor = {};
-        out.bgColorSet = true;
-        out.backgroundImage.clear();
-        out.backgroundImageSet = true;
-        out.bgNoRepeat = (low.find("no-repeat") != std::string::npos);
-        out.bgFixed = (low.find("fixed") != std::string::npos);
+        std::string bgImg;
+        bool noRepeat = (low.find("no-repeat") != std::string::npos);
+        bool fixed = (low.find("fixed") != std::string::npos);
         if (low.find("url(") != std::string::npos) {
             size_t us = low.find("url("), ue = val.find(')', us + 4);
-            if (ue != std::string::npos) {
-                std::string url = sTrim(val.substr(us + 4, ue - us - 4));
-                out.backgroundImage = stripQuotes(url);
-            }
+            if (ue != std::string::npos)
+                bgImg = stripQuotes(sTrim(val.substr(us + 4, ue - us - 4)));
         }
-        // Try each whitespace-separated token as a color (skip url(...) tokens)
+        CssColor bg; int colorCount = 0; bool invalid = false;
         {
             size_t i = 0;
             while (i < val.size()) {
                 while (i < val.size() && std::isspace((unsigned char)val[i])) i++;
                 if (i >= val.size()) break;
-                // Skip url(...)
-                if (i + 4 <= val.size() && sLower(val.substr(i, 4)) == "url(") {
-                    int depth = 1; i += 4;
-                    while (i < val.size() && depth > 0) {
-                        if (val[i] == '(') depth++;
-                        else if (val[i] == ')') depth--;
-                        i++;
-                    }
-                    continue;
+                // Paren-aware token: don't split inside url()/rgb()/hsl().
+                size_t j = i; int depth = 0;
+                while (j < val.size() && (depth > 0 || !std::isspace((unsigned char)val[j]))) {
+                    if (val[j] == '(') depth++;
+                    else if (val[j] == ')' && depth > 0) depth--;
+                    j++;
                 }
-                size_t j = i;
-                while (j < val.size() && !std::isspace((unsigned char)val[j])) j++;
                 std::string tok = val.substr(i, j - i);
-                // Skip positional/repeat keywords
                 std::string tl = sLower(tok);
-                if (tl != "no-repeat" && tl != "repeat" && tl != "center"
-                 && tl != "top" && tl != "bottom" && tl != "left" && tl != "right"
-                 && tl != "cover" && tl != "contain" && tl != "fixed" && tl != "scroll"
-                 && tl != "none") {
-                    CssColor c = ParseCssColor(tok);
-                    if (c.valid) { out.bgColor = c; break; }
-                }
                 i = j;
+                if (tl.rfind("url(", 0) == 0) continue;   // image handled above
+                bool keyword = (tl == "no-repeat" || tl == "repeat" || tl == "repeat-x"
+                    || tl == "repeat-y" || tl == "center" || tl == "top" || tl == "bottom"
+                    || tl == "left" || tl == "right" || tl == "cover" || tl == "contain"
+                    || tl == "fixed" || tl == "scroll" || tl == "local" || tl == "none"
+                    || tl == "inherit" || tl == "border-box" || tl == "padding-box"
+                    || tl == "content-box");
+                if (tl == "transparent") { bg = {true,0,0,0,0}; colorCount++; }
+                else if (!keyword) {
+                    CssColor c = ParseCssColor(tok);
+                    if (c.valid) { bg = c; colorCount++; }
+                    else if (tl.find('%') == std::string::npos && tl.find("px") == std::string::npos
+                             && !tl.empty() && !std::isdigit((unsigned char)tl[0]))
+                        invalid = true;   // unknown token (e.g. a second colour name)
+                }
             }
+        }
+        if (colorCount > 1 || invalid) {
+            // invalid background value → ignore declaration entirely
+        } else {
+            out.backgroundImage = bgImg;
+            out.backgroundImageSet = true;
+            out.bgNoRepeat = noRepeat;
+            out.bgFixed = fixed;
+            out.bgColor = bg;
+            out.bgColorSet = true;
         }
     } else if (prop == "background-image") {
         std::string low = sLower(val);
