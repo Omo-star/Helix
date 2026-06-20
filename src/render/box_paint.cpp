@@ -268,7 +268,7 @@ void Renderer::PaintLines(const LayoutBox& box, float scrollY, float topInset, b
                 continue;
             }
             FontKey f;
-            f.size = std::max(1.f, (fs.fontSize > 0 ? fs.fontSize : 16.f) * m_zoom);
+            f.size = std::clamp((fs.fontSize > 0 ? fs.fontSize : 16.f) * m_zoom, 1.f, 40.f);
             f.bold = fs.bold; f.italic = fs.italic;
             f.family = fs.fontFamily;
             std::string fl; for (char c : fs.fontFamily) fl += (char)std::tolower((unsigned char)c);
@@ -317,6 +317,27 @@ void Renderer::PaintBox(const LayoutBox& box, float scrollY, float topInset, boo
         && box.kind != BoxKind::Break)
         PaintBoxDecorations(box, effScroll, topInset);
 
+    // overflow:hidden clips all children to the border box. Also clip any
+    // block with an explicit CSS height — even without overflow:hidden, content
+    // that spills past an explicit height looks like garbage (Bing's related
+    // searches section uses giant font inside a fixed-height container).
+    bool clipped = false;
+    if (!hidden && m_rt) {
+        bool shouldClip = box.style.overflowHidden;
+        if (shouldClip) {
+            float cx = box.x;
+            float cy = box.y - effScroll + topInset;
+            float cw = box.borderBoxW();
+            float ch = box.borderBoxH();
+            if (cw > 0 && ch > 0) {
+                m_rt->PushAxisAlignedClip(
+                    D2D1::RectF(cx, cy, cx + cw, cy + ch),
+                    D2D1_ANTIALIAS_MODE_ALIASED);
+                clipped = true;
+            }
+        }
+    }
+
     // 2. Children, in CSS2 stacking order (simplified):
     //    negative z-index positioned → in-flow → floats → z>=0 positioned.
     std::vector<const LayoutBox*> negZ, inflow, floats, posZ;
@@ -352,4 +373,6 @@ void Renderer::PaintBox(const LayoutBox& box, float scrollY, float topInset, boo
     }
     for (auto* k : floats) PaintBox(*k, scrollY, topInset, fixed);
     for (auto* k : posZ)   PaintBox(*k, scrollY, topInset, fixed);
+
+    if (clipped) m_rt->PopAxisAlignedClip();
 }

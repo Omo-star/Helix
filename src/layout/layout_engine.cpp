@@ -451,7 +451,7 @@ struct Engine {
 
     FontKey fontFor(const ComputedStyle& s) const {
         FontKey f;
-        f.size = px(s.fontSize > 0 ? s.fontSize : 16.f);
+        f.size = std::min(px(s.fontSize > 0 ? s.fontSize : 16.f), 40.f);
         f.bold = s.bold; f.italic = s.italic;
         f.family = s.fontFamily;
         // monospace detection by family name
