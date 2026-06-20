@@ -154,6 +154,9 @@ void InheritInto(ComputedStyle& s, const ComputedStyle& parent) {
     if (!s.visibilitySet && parent.visibilitySet) { s.visibilityHidden = parent.visibilityHidden; s.visibilitySet = true; }
     if (!s.listStyleSet && parent.listStyleSet)   { s.listStyleNone = parent.listStyleNone; s.listStyleSet = true; }
     if (parent.underline) s.underline = true;   // text-decoration propagates visually
+    for (const auto& [name, value] : parent.customProperties)
+        if (s.customProperties.find(name) == s.customProperties.end())
+            s.customProperties[name] = value;
 }
 
 void ApplyUaDefaults(const std::string& tag, ComputedStyle& s) {
@@ -327,6 +330,7 @@ std::unique_ptr<LayoutBox> BuildPseudo(const Node* el, const char* which,
     if (!s.contentSet) return nullptr;
     InheritInto(s, parentStyle);
     ApplyUaDefaults(el->tagName, s);
+    ResolveStyleVariables(s);
 
     auto box = std::make_unique<LayoutBox>();
     box->node = nullptr;
@@ -359,6 +363,7 @@ std::unique_ptr<LayoutBox> BuildBox(const Node* node, const ComputedStyle& paren
     if (s.isDisplayNone()) return nullptr;
     InheritInto(s, parentStyle);
     ApplyUaDefaults(tag, s);
+    ResolveStyleVariables(s);
 
     // Effective display.
     int disp = s.display != 0 ? s.display : UaDisplay(tag);
@@ -549,6 +554,7 @@ struct Engine {
     void layoutBlockChildren(LayoutBox& box, std::vector<LayoutBox*>& positionedOut,
                              struct FloatCtx* inherited = nullptr);
     void layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut);
+    void layoutGrid(LayoutBox& box, std::vector<LayoutBox*>& positionedOut);
     void layoutTable(LayoutBox& box);
     float layoutInline(LayoutBox& box, struct FloatCtx* fctx);
     void layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
@@ -700,6 +706,11 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
     if (s.isDisplayFlex()) {
         std::vector<LayoutBox*> positioned;
         layoutFlex(box, positioned);
+        for (auto* p : positioned) positionedOut.push_back(p);
+        if (explicitH >= 0) box.contentH = explicitH;
+    } else if (s.isDisplayGrid()) {
+        std::vector<LayoutBox*> positioned;
+        layoutGrid(box, positioned);
         for (auto* p : positioned) positionedOut.push_back(p);
         if (explicitH >= 0) box.contentH = explicitH;
     } else if (box.establishesInline) {
@@ -899,6 +910,90 @@ void Engine::layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
 }
 
 // ─── table layout (auto algorithm) ───────────────────────────────────────────
+// ─── grid layout ─────────────────────────────────────────────────────────────
+// Handles fixed, percentage, fr, and auto columns with gap. Items are placed
+// in document order into the explicit column template, wrapping to new rows.
+void Engine::layoutGrid(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) {
+    DepthScope _d; if (g_depth > kMaxDepth) return;
+    const auto& tracks = box.style.gridTemplateColumns;
+    const float gap = box.style.flexGap >= 0 ? px(box.style.flexGap) : 0.f;
+    const float avail = box.contentW;
+
+    // Collect in-flow children.
+    std::vector<LayoutBox*> items;
+    for (auto& k : box.kids) {
+        if (k->isOutOfFlow()) { positionedOut.push_back(k.get()); continue; }
+        items.push_back(k.get());
+    }
+    if (items.empty()) { box.contentH = 0; return; }
+
+    // Resolve column widths. Track tokens: "Npx", "N%", "Nfr", "auto".
+    size_t cols = tracks.empty() ? items.size() : tracks.size();
+    std::vector<float> colW(cols, 0.f);
+    float fixedSum = 0.f, frSum = 0.f;
+    std::vector<float> frVals(cols, 0.f);
+    for (size_t i = 0; i < cols; ++i) {
+        if (i >= tracks.size() || tracks[i] == "auto") {
+            frVals[i] = 1.f; frSum += 1.f; continue;
+        }
+        const std::string& t = tracks[i];
+        size_t frPos = t.find("fr");
+        if (frPos != std::string::npos) {
+            float f = 1.f;
+            try { f = std::stof(t.substr(0, frPos)); } catch (...) {}
+            if (f < 0) f = 0;
+            frVals[i] = f; frSum += f;
+        } else if (!t.empty() && t.back() == '%') {
+            float pct = 0;
+            try { pct = std::stof(t.substr(0, t.size() - 1)); } catch (...) {}
+            colW[i] = avail * (pct / 100.f);
+            fixedSum += colW[i];
+        } else {
+            // Try to parse as a pixel value (e.g. "200px" or bare "200").
+            float v = -1;
+            try { v = std::stof(t); } catch (...) {}
+            if (v >= 0) { colW[i] = px(v); fixedSum += colW[i]; }
+            else { frVals[i] = 1.f; frSum += 1.f; }
+        }
+    }
+    // Distribute remaining space to fr tracks.
+    float gapTotal = gap * std::max(0, (int)cols - 1);
+    float frSpace = std::max(0.f, avail - fixedSum - gapTotal);
+    if (frSum > 0) {
+        for (size_t i = 0; i < cols; ++i)
+            if (frVals[i] > 0) colW[i] = frSpace * (frVals[i] / frSum);
+    }
+
+    // Column x offsets.
+    std::vector<float> colX(cols);
+    { float x = box.contentX();
+      for (size_t i = 0; i < cols; ++i) { colX[i] = x; x += colW[i] + gap; } }
+
+    // Place items row by row.
+    float rowY = box.contentY();
+    size_t idx = 0;
+    while (idx < items.size()) {
+        float rowH = 0;
+        for (size_t c = 0; c < cols && idx < items.size(); ++c, ++idx) {
+            LayoutBox& item = *items[idx];
+            // Force item width to the column width.
+            float savedW = item.style.width;
+            float savedPct = item.style.widthPercent;
+            item.style.width = std::max(0.f, colW[c] - hExtra(item.style)) / std::max(0.01f, Z);
+            item.style.widthPercent = -1;
+            item.y = rowY;
+            std::vector<LayoutBox*> pos;
+            layoutBox(item, colX[c], colW[c], -1.f, pos, nullptr);
+            for (auto* p : pos) positionedOut.push_back(p);
+            item.style.width = savedW;
+            item.style.widthPercent = savedPct;
+            rowH = std::max(rowH, item.marginBoxH());
+        }
+        rowY += rowH + gap;
+    }
+    box.contentH = std::max(0.f, rowY - gap - box.contentY());
+}
+
 // A real fixed-grid auto table layout: column widths are SHARED across rows
 // (so cells line up vertically), each column sizes to its max-content, the
 // table shrinks to fit its content (capped at the available width), and colspan
@@ -1316,6 +1411,10 @@ void ApplyRelativeOffsets(Engine& E, LayoutBox& box) {
 
 std::unique_ptr<LayoutBox> LayoutDocument(const LayoutInput& in) {
     if (!in.document) return nullptr;
+
+    if (in.sheet)
+        in.sheet->setViewport(in.viewportW / std::max(0.01f, in.zoom),
+                              in.viewportH / std::max(0.01f, in.zoom));
 
     BuildCtx bc{ in.sheet, in.measure, in.zoom, in.baseUrl };
 

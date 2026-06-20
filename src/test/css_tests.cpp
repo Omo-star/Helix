@@ -268,5 +268,38 @@ TestResult RunCssTests() {
             result);
     }
 
+    {
+        auto dom = ParseHtml("<html><body><div id=\"target\"></div></body></html>");
+        auto* rootNode = FindFirstElement(dom.get(), "html");
+        auto* target = FindElementById(dom.get(), "target");
+        auto sheet = ParseStylesheet(
+            ":root { --brand: #13579b; --gap: 12px; }"
+            "#target { color: var(--brand); padding-left: var(--gap); }");
+        auto rootStyle = rootNode ? sheet.resolve(rootNode) : ComputedStyle{};
+        ResolveStyleVariables(rootStyle);
+        auto targetStyle = target ? rootStyle.inherit(sheet.resolve(target)) : ComputedStyle{};
+        ResolveStyleVariables(targetStyle);
+        ExpectEqual("css/custom-properties/inherited-and-resolved",
+            SerializeComputedStyle(targetStyle),
+            "color=0.0745098,0.341176,0.607843,1 paddingLeft=12 \n",
+            result);
+    }
+
+    {
+        auto dom = ParseHtml("<html><body><div id=\"target\"></div></body></html>");
+        auto* target = FindElementById(dom.get(), "target");
+        auto sheet = ParseStylesheet(
+            "#target { color: red; }"
+            "@media screen and (min-width: 600px) { #target { color: blue; } }");
+        sheet.setViewport(599.f, 800.f);
+        const std::string narrow = target ? SerializeComputedStyle(sheet.resolve(target)) : "missing\n";
+        sheet.setViewport(600.f, 800.f);
+        const std::string wide = target ? SerializeComputedStyle(sheet.resolve(target)) : "missing\n";
+        ExpectEqual("css/media/min-width",
+            "narrow: " + narrow + "wide: " + wide,
+            "narrow: color=1,0,0,1 \nwide: color=0,0,1,1 \n",
+            result);
+    }
+
     return result;
 }

@@ -58,6 +58,36 @@ TestResult RunLayoutEngineTests() {
         result);
 
     {
+        auto gridDom = ParseHtml(
+            "<html><body><div id=\"grid\"><div id=\"g1\"></div><div id=\"g2\"></div>"
+            "<div id=\"g3\"></div></div></body></html>");
+        auto gridSheet = ParseStylesheet(
+            "#grid { display:grid; width:210px; grid-template-columns:1fr 2fr; gap:10px; }"
+            "#grid > div { height:20px; }");
+        LayoutInput gridInput;
+        gridInput.document = gridDom.get();
+        gridInput.sheet = &gridSheet;
+        gridInput.measure = &measure;
+        gridInput.viewportW = 320.f;
+        gridInput.viewportH = 480.f;
+        auto gridLayout = LayoutDocument(gridInput);
+        auto* g1 = FindEngineBoxById(gridLayout.get(), "g1");
+        auto* g2 = FindEngineBoxById(gridLayout.get(), "g2");
+        auto* g3 = FindEngineBoxById(gridLayout.get(), "g3");
+        const bool gridFound = g1 && g2 && g3;
+        const int firstWidth = gridFound ? static_cast<int>(g1->contentW + .5f) : -1;
+        const int secondX = gridFound ? static_cast<int>(g2->x - g1->x + .5f) : -1;
+        const int nextRowY = gridFound ? static_cast<int>(g3->y - g1->y + .5f) : -1;
+        ExpectEqual("layout-engine/grid-fr-tracks-and-row-gap",
+            std::string(gridFound ? "found " : "missing ")
+                + "firstWidth=" + std::to_string(firstWidth)
+                + " secondX=" + std::to_string(secondX)
+                + " nextRowY=" + std::to_string(nextRowY) + "\n",
+            "found firstWidth=67 secondX=77 nextRowY=30\n",
+            result);
+    }
+
+    {
         std::string giantText(256 * 1024, 'x');
         auto giantDom = ParseHtml("<html><body><p id=\"giant\">" + giantText + "</p></body></html>");
         auto giantSheet = ParseStylesheet("");

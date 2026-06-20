@@ -28,12 +28,31 @@ struct CssSelectorPart {
     char combinator = 0;   // 0 = first part, ' ' = descendant, '>' = child, '+' = adjacent sibling
 };
 
+// One branch of an @media query list. A rule without media conditions is
+// unconditional; otherwise any branch in its list may enable the rule.
+struct CssMediaCondition {
+    float minWidth = -1.f;
+    float maxWidth = -1.f;
+    float minHeight = -1.f;
+    float maxHeight = -1.f;
+    bool supported = true;
+
+    bool matches(float width, float height) const {
+        return supported
+            && (minWidth < 0.f || width >= minWidth)
+            && (maxWidth < 0.f || width <= maxWidth)
+            && (minHeight < 0.f || height >= minHeight)
+            && (maxHeight < 0.f || height <= maxHeight);
+    }
+};
+
 struct CssRule {
     std::string tag;       // "" = any
     std::string cls;       // "" = any  (matches class attribute)
     std::string id;        // "" = any
     std::vector<CssSelectorPart> selector;
     ComputedStyle style;
+    std::vector<CssMediaCondition> media;
 
     int specificity() const;
 
@@ -42,6 +61,13 @@ struct CssRule {
 
 struct Stylesheet {
     std::vector<CssRule> rules;
+    float viewportWidth = 800.f;
+    float viewportHeight = 600.f;
+
+    void setViewport(float width, float height) {
+        viewportWidth = width;
+        viewportHeight = height;
+    }
 
     // Compute style for a node from the sheet + its inline style=""
     ComputedStyle resolve(const Node* node) const;
@@ -49,5 +75,6 @@ struct Stylesheet {
 
 Stylesheet ParseStylesheet(const std::string& css);
 ComputedStyle ParseInlineStyle(const std::string& style);
+void ResolveStyleVariables(ComputedStyle& style);
 std::string SerializeStylesheet(const Stylesheet& sheet);
 std::string SerializeComputedStyle(const ComputedStyle& style);

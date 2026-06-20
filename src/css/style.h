@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
 #include <cmath>
+#include <map>
+#include <utility>
+#include <vector>
 
 static constexpr float kCssNotSet = -1e6f;
 static constexpr float kCssAuto   = -2.f;
@@ -40,7 +43,7 @@ struct ComputedStyle {
     bool     italic       = false;
     bool     italicSet    = false;
     bool     underline    = false;
-    // Display: 0=unset, 1=block, 2=inline, 3=none, 4=flex, 5=table, 6=table-cell
+    // Display: 0=unset, 1=block, 2=inline, 3=none, 4=flex, 5=table, 6=table-cell, 11=grid
     int      display      = 0;
     // Box model (kCssNotSet = not set, kCssAuto = auto for margins)
     float    marginTop    = kCssNotSet;
@@ -118,11 +121,19 @@ struct ComputedStyle {
     float    flexGrow        = 0;
     bool     flexGrowSet     = false;
     float    flexGap         = -1;
+    // Grid tracks remain CSS tokens until their containing block is known.
+    std::vector<std::string> gridTemplateColumns;
+    bool     gridTemplateColumnsSet = false;
+    // Custom properties stay as tokens until the element has inherited its
+    // parent's variables; declarations containing var() are resolved then.
+    std::map<std::string, std::string> customProperties;
+    std::vector<std::pair<std::string, std::string>> deferredDeclarations;
 
     bool isDisplayNone()        const { return display == 3; }
     bool isDisplayBlock()       const { return display == 1; }
     bool isDisplayInline()      const { return display == 2; }
     bool isDisplayFlex()        const { return display == 4; }
+    bool isDisplayGrid()        const { return display == 11; }
     bool isDisplayTable()       const { return display == 5; }
     bool isDisplayTableCell()   const { return display == 6; }
     bool isDisplayInlineBlock() const { return display == 7; }
@@ -224,6 +235,14 @@ struct ComputedStyle {
             out.flexGrowSet = true;
         }
         if (child.flexGap >= 0) out.flexGap = child.flexGap;
+        if (child.gridTemplateColumnsSet) {
+            out.gridTemplateColumns = child.gridTemplateColumns;
+            out.gridTemplateColumnsSet = true;
+        }
+        for (const auto& [name, value] : child.customProperties)
+            out.customProperties[name] = value;
+        out.deferredDeclarations.insert(out.deferredDeclarations.end(),
+            child.deferredDeclarations.begin(), child.deferredDeclarations.end());
         return out;
     }
 };

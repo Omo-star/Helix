@@ -362,6 +362,23 @@ static void ParseBgSize(const std::string& v, ComputedStyle& out) {
     out.bgSizeWPct = wp; out.bgSizeHPct = hp; out.bgSizeSet = true;
 }
 
+static std::vector<std::string> SplitGridTracks(const std::string& value) {
+    std::vector<std::string> tracks;
+    std::string token;
+    int parens = 0;
+    for (char c : value) {
+        if (c == '(') ++parens;
+        else if (c == ')' && parens > 0) --parens;
+        if (std::isspace((unsigned char)c) && parens == 0) {
+            if (!token.empty()) { tracks.push_back(token); token.clear(); }
+        } else {
+            token += c;
+        }
+    }
+    if (!token.empty()) tracks.push_back(token);
+    return tracks;
+}
+
 static void ApplyDeclaration(const std::string& prop,
                              const std::string& val,
                              ComputedStyle& out) {
@@ -556,7 +573,8 @@ static void ApplyDeclaration(const std::string& prop,
         if      (v == "none")                                          out.display = 3;
         else if (v == "block")                                         out.display = 1;
         else if (v == "inline")                                        out.display = 2;
-        else if (v == "flex" || v == "inline-flex" || v == "grid" || v == "inline-grid") out.display = 4;
+        else if (v == "flex" || v == "inline-flex")                     out.display = 4;
+        else if (v == "grid" || v == "inline-grid")                     out.display = 11;
         else if (v == "table" || v == "inline-table")                  out.display = 5;
         else if (v == "table-cell")                                    out.display = 6;
         else if (v == "inline-block")                                  out.display = 7;
@@ -586,6 +604,12 @@ static void ApplyDeclaration(const std::string& prop,
         values >> gap;
         float parsed = ParseLength(gap);
         if (parsed >= 0) out.flexGap = parsed;
+    } else if (prop == "grid-template-columns") {
+        auto tracks = SplitGridTracks(sTrim(val));
+        if (!tracks.empty()) {
+            out.gridTemplateColumns = std::move(tracks);
+            out.gridTemplateColumnsSet = true;
+        }
     } else if (prop == "margin") {
         std::istringstream vs(val); std::vector<float> v;
         std::string tok;
@@ -854,12 +878,52 @@ static void ApplyDeclaration(const std::string& prop,
     }
 }
 
+static void StoreDeclaration(const std::string& property, const std::string& value,
+                             ComputedStyle& style) {
+    if (property.rfind("--", 0) == 0) {
+        style.customProperties[property] = value;
+    } else if (value.find("var(") != std::string::npos) {
+        style.deferredDeclarations.emplace_back(property, value);
+    } else {
+        ApplyDeclaration(property, value, style);
+    }
+}
+
+static bool ResolveVarValue(std::string& value,
+                            const std::map<std::string, std::string>& properties) {
+    for (int depth = 0; depth < 8; ++depth) {
+        const size_t start = value.find("var(");
+        if (start == std::string::npos) return true;
+        const size_t end = value.find(')', start + 4);
+        if (end == std::string::npos) return false;
+        const std::string args = value.substr(start + 4, end - start - 4);
+        const size_t comma = args.find(',');
+        const std::string name = sTrim(args.substr(0, comma));
+        auto it = properties.find(name);
+        std::string replacement;
+        if (it != properties.end()) replacement = it->second;
+        else if (comma != std::string::npos) replacement = sTrim(args.substr(comma + 1));
+        else return false;
+        value.replace(start, end - start + 1, replacement);
+    }
+    return value.find("var(") == std::string::npos;
+}
+
+void ResolveStyleVariables(ComputedStyle& style) {
+    for (const auto& [property, rawValue] : style.deferredDeclarations) {
+        std::string value = rawValue;
+        if (ResolveVarValue(value, style.customProperties))
+            ApplyDeclaration(property, value, style);
+    }
+    style.deferredDeclarations.clear();
+}
+
 ComputedStyle ParseInlineStyle(const std::string& style) {
     ComputedStyle out;
     for (const auto& decl : SplitDeclarations(style)) {
         size_t colon = decl.find(':');
         if (colon == std::string::npos) continue;
-        ApplyDeclaration(sLower(sTrim(decl.substr(0, colon))),
+        StoreDeclaration(sLower(sTrim(decl.substr(0, colon))),
                          sTrim(decl.substr(colon+1)), out);
     }
     return out;
@@ -1045,7 +1109,13 @@ bool CssRule::matches(const Node* node) const {
 ComputedStyle Stylesheet::resolve(const Node* node) const {
     // Collect matching rules, sorted by specificity
     std::vector<const CssRule*> matched;
-    for (auto& r : rules) if (r.matches(node)) matched.push_back(&r);
+    for (auto& r : rules) {
+        const bool mediaMatches = r.media.empty() || std::any_of(r.media.begin(), r.media.end(),
+            [&](const CssMediaCondition& condition) {
+                return condition.matches(viewportWidth, viewportHeight);
+            });
+        if (mediaMatches && r.matches(node)) matched.push_back(&r);
+    }
     std::stable_sort(matched.begin(), matched.end(),
         [](const CssRule* a, const CssRule* b) {
             return a->specificity() < b->specificity();
@@ -1260,6 +1330,116 @@ static CssRule parseSelector(const std::string& sel) {
     return rule;
 }
 
+static size_t FindMatchingCssBrace(const std::string& css, size_t lbrace) {
+    int depth = 0;
+    char quote = 0;
+    bool escaped = false;
+    for (size_t i = lbrace; i < css.size(); ++i) {
+        const char c = css[i];
+        if (escaped) { escaped = false; continue; }
+        if (c == '\\') { escaped = true; continue; }
+        if (quote) { if (c == quote) quote = 0; continue; }
+        if (c == '\'' || c == '"') { quote = c; continue; }
+        if (c == '{') ++depth;
+        else if (c == '}' && --depth == 0) return i;
+    }
+    return std::string::npos;
+}
+
+static std::vector<std::string> SplitMediaList(const std::string& prelude) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    int parens = 0;
+    for (size_t i = 0; i < prelude.size(); ++i) {
+        if (prelude[i] == '(') ++parens;
+        else if (prelude[i] == ')' && parens > 0) --parens;
+        else if (prelude[i] == ',' && parens == 0) {
+            parts.push_back(sTrim(prelude.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    parts.push_back(sTrim(prelude.substr(start)));
+    return parts;
+}
+
+static bool ParseMediaLength(const std::string& raw, float& out) {
+    const float value = ParseLength(raw, 16.f);
+    if (value < 0.f) return false;
+    out = value;
+    return true;
+}
+
+static std::vector<CssMediaCondition> ParseMediaConditions(const std::string& prelude) {
+    std::vector<CssMediaCondition> conditions;
+    for (const auto& part : SplitMediaList(prelude)) {
+        CssMediaCondition condition;
+        const std::string lower = sLower(part);
+        if (lower.empty() || lower.find("not ") != std::string::npos
+            || lower.find("print") != std::string::npos || lower.find("speech") != std::string::npos) {
+            condition.supported = false;
+        }
+
+        size_t pos = 0;
+        while (pos < lower.size()) {
+            const size_t open = lower.find('(', pos);
+            if (open == std::string::npos) break;
+            const size_t close = lower.find(')', open + 1);
+            if (close == std::string::npos) { condition.supported = false; break; }
+            const std::string feature = sTrim(lower.substr(open + 1, close - open - 1));
+            const size_t colon = feature.find(':');
+            if (colon == std::string::npos) {
+                condition.supported = false;
+            } else {
+                const std::string name = sTrim(feature.substr(0, colon));
+                float length = 0.f;
+                if (!ParseMediaLength(sTrim(feature.substr(colon + 1)), length)) {
+                    condition.supported = false;
+                } else if (name == "min-width") {
+                    condition.minWidth = std::max(condition.minWidth, length);
+                } else if (name == "max-width") {
+                    condition.maxWidth = condition.maxWidth < 0.f ? length : std::min(condition.maxWidth, length);
+                } else if (name == "min-height") {
+                    condition.minHeight = std::max(condition.minHeight, length);
+                } else if (name == "max-height") {
+                    condition.maxHeight = condition.maxHeight < 0.f ? length : std::min(condition.maxHeight, length);
+                } else {
+                    condition.supported = false;
+                }
+            }
+            pos = close + 1;
+        }
+        conditions.push_back(condition);
+    }
+    return conditions;
+}
+
+static CssMediaCondition MergeMediaCondition(const CssMediaCondition& a,
+                                              const CssMediaCondition& b) {
+    CssMediaCondition merged;
+    merged.minWidth = std::max(a.minWidth, b.minWidth);
+    merged.minHeight = std::max(a.minHeight, b.minHeight);
+    merged.maxWidth = a.maxWidth < 0.f ? b.maxWidth
+        : (b.maxWidth < 0.f ? a.maxWidth : std::min(a.maxWidth, b.maxWidth));
+    merged.maxHeight = a.maxHeight < 0.f ? b.maxHeight
+        : (b.maxHeight < 0.f ? a.maxHeight : std::min(a.maxHeight, b.maxHeight));
+    merged.supported = a.supported && b.supported
+        && (merged.maxWidth < 0.f || merged.minWidth <= merged.maxWidth)
+        && (merged.maxHeight < 0.f || merged.minHeight <= merged.maxHeight);
+    return merged;
+}
+
+static std::vector<CssMediaCondition> CombineMediaConditions(
+    const std::vector<CssMediaCondition>& outer,
+    const std::vector<CssMediaCondition>& inner) {
+    if (outer.empty()) return inner;
+    if (inner.empty()) return outer;
+    std::vector<CssMediaCondition> combined;
+    for (const auto& a : outer)
+        for (const auto& b : inner)
+            combined.push_back(MergeMediaCondition(a, b));
+    return combined;
+}
+
 Stylesheet ParseStylesheet(const std::string& rawCss) {
     g_emBase = 16.f;  // reset per stylesheet
     Stylesheet sheet;
@@ -1280,15 +1460,20 @@ Stylesheet ParseStylesheet(const std::string& rawCss) {
                 // Statement @-rule (@charset, @import, @namespace)
                 pos = semiPos + 1;
             } else if (lbPos != std::string::npos) {
-                // Block @-rule (@media, @keyframes, @supports, @font-face)
-                // Skip to the matching closing brace, counting nesting depth
-                pos = lbPos + 1;
-                int depth = 1;
-                while (pos < css.size() && depth > 0) {
-                    if (css[pos] == '{') depth++;
-                    else if (css[pos] == '}') depth--;
-                    pos++;
+                const size_t rbPos = FindMatchingCssBrace(css, lbPos);
+                if (rbPos == std::string::npos) break;
+                const std::string header = sLower(sTrim(css.substr(pos, lbPos - pos)));
+                if (header.rfind("@media", 0) == 0) {
+                    const auto conditions = ParseMediaConditions(header.substr(6));
+                    const float outerEmBase = g_emBase;
+                    Stylesheet nested = ParseStylesheet(css.substr(lbPos + 1, rbPos - lbPos - 1));
+                    g_emBase = outerEmBase;
+                    for (auto& rule : nested.rules) {
+                        rule.media = CombineMediaConditions(conditions, rule.media);
+                        sheet.rules.push_back(std::move(rule));
+                    }
                 }
+                pos = rbPos + 1;
             } else {
                 break;
             }
@@ -1345,7 +1530,7 @@ Stylesheet ParseStylesheet(const std::string& rawCss) {
             if (property == "font" || property == "font-size"
                 || property == "font-family" || property == "font-weight"
                 || property == "font-style") {
-                ApplyDeclaration(property, sTrim(decl.substr(colon+1)), declStyle);
+                StoreDeclaration(property, sTrim(decl.substr(colon+1)), declStyle);
             }
         }
         const float elementEmBase = declStyle.fontSize > 0 ? declStyle.fontSize : inheritedEmBase;
@@ -1357,7 +1542,7 @@ Stylesheet ParseStylesheet(const std::string& rawCss) {
             if (property == "font" || property == "font-size"
                 || property == "font-family" || property == "font-weight"
                 || property == "font-style") continue;
-            ApplyDeclaration(property, sTrim(decl.substr(colon+1)), declStyle);
+            StoreDeclaration(property, sTrim(decl.substr(colon+1)), declStyle);
         }
 
         // Each comma-separated selector becomes its own rule

@@ -12,7 +12,7 @@
 
 struct LayoutInput {
     const Node*       document = nullptr;
-    const Stylesheet* sheet    = nullptr;
+    Stylesheet*       sheet    = nullptr;
     ITextMeasure*     measure  = nullptr;
     float             viewportW = 800.f;  // device px
     float             viewportH = 600.f;  // device px
