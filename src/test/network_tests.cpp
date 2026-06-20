@@ -1,7 +1,19 @@
 #include "test/fixture.h"
 
 #include "network/fetcher.h"
+#include "network/text_decode.h"
 #include "network/url.h"
+#include "html/parser.h"
+#include "html/resources.h"
+
+static Node* FindScriptById(Node* root, const std::string& id) {
+    if (!root) return nullptr;
+    if (root->type == NodeType::Element && root->tagName == "script" && root->attr("id") == id)
+        return root;
+    for (auto& child : root->children)
+        if (auto* found = FindScriptById(child.get(), id)) return found;
+    return nullptr;
+}
 
 TestResult RunNetworkTests() {
     TestResult result;
@@ -21,6 +33,19 @@ TestResult RunNetworkTests() {
             + std::to_string(res.body.size()) + " " + res.body + "\n";
         ExpectEqual("network/data-url/base64", actual,
             "success image/png 4 ABCD\n", result);
+    }
+
+    {
+        const std::string cp1252 = "caf\xE9";
+        const std::string metaCp1252 = "<meta charset=\"windows-1252\">caf\xE9";
+        std::string actual;
+        actual += DecodeTextToUtf8(cp1252, "text/html; charset=windows-1252") + "\n";
+        actual += DecodeTextToUtf8(metaCp1252, "text/html", true) + "\n";
+        actual += DecodeTextToUtf8("\xEF\xBB\xBFhello", "text/html") + "\n";
+        ExpectEqual("network/text-decode/headers-meta-and-bom",
+            actual,
+            "caf\xC3\xA9\n<meta charset=\"windows-1252\">caf\xC3\xA9\nhello\n",
+            result);
     }
 
     {
@@ -44,6 +69,37 @@ TestResult RunNetworkTests() {
         ExpectEqual("network/bing-result-link-opens-and-previews-direct-destination",
             UnwrapBingRedirect(bing) + "\n",
             "https://helium.computer/\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string source = ReadTextFile(root / "src/network/fetcher.cpp");
+        const bool hasSession = source.find("SharedInternetSession") != std::string::npos;
+        const bool enablesDecode = source.find("INTERNET_OPTION_HTTP_DECODING") != std::string::npos;
+        const bool resolvesRedirects = source.find("INTERNET_OPTION_URL") != std::string::npos;
+        ExpectEqual("network/http-session-decoding-and-final-url",
+            std::string(hasSession ? "session " : "no-session ")
+                + (enablesDecode ? "decode " : "no-decode ")
+                + (resolvesRedirects ? "url\n" : "no-url\n"),
+            "session decode url\n",
+            result);
+    }
+
+    {
+        auto document = ParseHtml(
+            "<html><head><script id=\"classic\" "
+            "src=\"data:text/javascript,window.answer%3D42%3B\"></script></head></html>");
+        LoadExternalScriptSources(document, "https://example.test/page.html");
+        Node* script = FindScriptById(document.get(), "classic");
+        std::string source;
+        if (script) {
+            for (const auto& child : script->children)
+                if (child->type == NodeType::Text) source += child->text;
+        }
+        ExpectEqual("network/external-classic-script-is-fetched-into-dom-order",
+            (script ? script->attr("__helix_script_filename") : "missing") + "\n" + source + "\n",
+            "data:text/javascript,window.answer%3D42%3B\nwindow.answer=42;\n",
             result);
     }
 

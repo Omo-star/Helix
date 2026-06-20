@@ -1,6 +1,7 @@
 #include "html/resources.h"
 
 #include "network/fetcher.h"
+#include "network/text_decode.h"
 #include "network/url.h"
 
 #include <algorithm>
@@ -46,7 +47,8 @@ void LoadExternalScriptSources(const std::shared_ptr<Node>& document,
                 && response.body.size() <= kMaxScriptBytes
                 && loadedBytes + response.body.size() <= kMaxTotalBytes) {
                 node->children.clear();
-                node->appendChild(Node::makeText(response.body));
+                node->appendChild(Node::makeText(
+                    DecodeTextToUtf8(response.body, response.contentType)));
                 node->attrs["__helix_script_filename"] = url;
                 loadedBytes += response.body.size();
                 ++loaded;

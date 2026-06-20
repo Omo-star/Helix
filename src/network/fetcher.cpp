@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <wininet.h>
 #include <cctype>
+#include <cstring>
+#include <mutex>
 #pragma comment(lib, "wininet.lib")
 
 static int HexValue(char c) {
@@ -66,6 +68,21 @@ static bool StartsWithNoCase(const std::string& value, const char* prefix) {
     return true;
 }
 
+static HINTERNET SharedInternetSession() {
+    static std::once_flag init;
+    static HINTERNET session = nullptr;
+    std::call_once(init, []() {
+        session = InternetOpenA(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Helix/0.1 (+https://github.com/helix-browser)",
+            INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+        if (session) {
+            DWORD decode = TRUE;
+            InternetSetOptionA(session, INTERNET_OPTION_HTTP_DECODING, &decode, sizeof(decode));
+        }
+    });
+    return session;
+}
+
 FetchResult FetchUrl(const std::string& url) {
     FetchResult r;
 
@@ -101,12 +118,9 @@ FetchResult FetchUrl(const std::string& url) {
         return r;
     }
 
-    // A descriptive User-Agent is required by several hosts (Wikimedia returns
-    // HTTP 429 to generic/empty agents).
-    HINTERNET hNet = InternetOpenA(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Helix/0.1 (+https://github.com/helix-browser)",
-        INTERNET_OPEN_TYPE_PRECONFIG,
-        nullptr, nullptr, 0);
+    // Keep one WinINet session alive. Besides avoiding setup churn, this keeps
+    // session cookies available to subsequent page, stylesheet, and image requests.
+    HINTERNET hNet = SharedInternetSession();
     if (!hNet) { r.error = "InternetOpen failed"; return r; }
 
     DWORD flags =
@@ -115,18 +129,26 @@ FetchResult FetchUrl(const std::string& url) {
         INTERNET_FLAG_IGNORE_CERT_DATE_INVALID |
         INTERNET_FLAG_IGNORE_CERT_CN_INVALID;  // tolerate self-signed in v0.1
 
-    HINTERNET hReq = InternetOpenUrlA(hNet, url.c_str(), nullptr, 0, flags, 0);
+    static constexpr char kHeaders[] =
+        "Accept-Encoding: gzip, deflate\r\n"
+        "Accept-Language: en-US,en;q=0.9\r\n";
+    HINTERNET hReq = InternetOpenUrlA(hNet, url.c_str(), kHeaders, -1L, flags, 0);
     if (!hReq) {
         r.error = "InternetOpenUrl failed for: " + url;
-        InternetCloseHandle(hNet);
         return r;
     }
 
-    // Resolve final URL (after redirects)
-    char finalUrl[2048] = {};
-    DWORD len = (DWORD)sizeof(finalUrl);
-    HttpQueryInfoA(hReq, HTTP_QUERY_LOCATION, finalUrl, &len, nullptr);
-    r.finalUrl = *finalUrl ? std::string(finalUrl) : url;
+    // INTERNET_OPTION_URL reports the resolved request URL after any redirects.
+    DWORD finalUrlLength = 0;
+    InternetQueryOptionA(hReq, INTERNET_OPTION_URL, nullptr, &finalUrlLength);
+    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && finalUrlLength > 1) {
+        std::string finalUrl(finalUrlLength, '\0');
+        if (InternetQueryOptionA(hReq, INTERNET_OPTION_URL, finalUrl.data(), &finalUrlLength)) {
+            finalUrl.resize(std::strlen(finalUrl.c_str()));
+            r.finalUrl = std::move(finalUrl);
+        }
+    }
+    if (r.finalUrl.empty()) r.finalUrl = url;
 
     // HTTP status code: don't treat 4xx/5xx error pages as a successful body
     // (otherwise a 429 rate-limit page gets handed to the image decoder).
@@ -137,18 +159,25 @@ FetchResult FetchUrl(const std::string& url) {
 
     // Content-Type header
     char ct[256] = {};
-    len = (DWORD)sizeof(ct);
+    DWORD len = (DWORD)sizeof(ct);
     HttpQueryInfoA(hReq, HTTP_QUERY_CONTENT_TYPE, ct, &len, nullptr);
     r.contentType = ct;
 
     // Read body
     char buf[8192];
     DWORD bytesRead = 0;
-    while (InternetReadFile(hReq, buf, sizeof(buf), &bytesRead) && bytesRead)
+    static constexpr size_t kMaxResponseBytes = 12 * 1024 * 1024;
+    while (InternetReadFile(hReq, buf, sizeof(buf), &bytesRead) && bytesRead) {
+        if (r.body.size() + bytesRead > kMaxResponseBytes) {
+            r.body.clear();
+            r.error = "Response exceeds 12 MiB limit";
+            InternetCloseHandle(hReq);
+            return r;
+        }
         r.body.append(buf, bytesRead);
+    }
 
     InternetCloseHandle(hReq);
-    InternetCloseHandle(hNet);
     r.status = (int)status;
     if (status >= 400) {
         r.success = false;

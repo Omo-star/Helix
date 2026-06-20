@@ -18,9 +18,11 @@ endif()
 
 add_library(helix_engine STATIC
     src/network/fetcher.cpp
+    src/network/text_decode.cpp
     src/network/url.cpp
     src/html/tokenizer.cpp
     src/html/parser.cpp
+    src/html/resources.cpp
     src/html/serializer.cpp
     src/css/stylesheet.cpp
     src/layout/layout.cpp

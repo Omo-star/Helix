@@ -5,6 +5,8 @@
 #include "network/fetcher.h"
 #include "network/url.h"
 #include "html/parser.h"
+#include "html/resources.h"
+#include "network/text_decode.h"
 #include "layout/scroll.h"
 #include "render/renderer.h"
 #include "js/engine.h"
@@ -196,7 +198,7 @@ static void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std:
                 loadedBytes += res.body.size();
                 if (loadedBytes <= 512 * 1024) {
                     auto style = Node::makeElement("style");
-                    style->appendChild(Node::makeText(res.body));
+                    style->appendChild(Node::makeText(DecodeTextToUtf8(res.body, res.contentType)));
                     attach->appendChild(style);
                     ++loaded;
                 }
@@ -417,10 +419,12 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         try {
             auto res = FetchUrl(fetchUrl);
             if (res.success) {
-                p->dom = ParseHtml(res.body);
+                p->dom = ParseHtml(DecodeTextToUtf8(res.body, res.contentType, true));
                 if (!res.finalUrl.empty() && res.finalUrl != url)
                     p->url = res.finalUrl;
                 LoadExternalStylesheets(p->dom, p->url);
+                if (getenv("HELIX_JS") != nullptr)
+                    LoadExternalScriptSources(p->dom, p->url);
             } else {
                 p->error = res.error;
             }
@@ -710,17 +714,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     stack.pop_back();
                     if (!n) continue;
                     if (n->type == NodeType::Element && n->tagName == "script") {
-                        std::string src;
+                        std::string source;
                         for (auto& c : n->children)
-                            if (c->type == NodeType::Text) src += c->text;
-                        totalScriptBytes += src.size();
+                            if (c->type == NodeType::Text) source += c->text;
+                        totalScriptBytes += source.size();
                         // Page scripts are opt-in: heavy real-world JS (e.g. Bing's
                         // search page) running in our incomplete environment tends to
                         // rewrite/blank the DOM. Rendering the static HTML is far more
                         // useful. Set HELIX_JS=1 to re-enable script execution.
                         static bool jsEnabled = (getenv("HELIX_JS") != nullptr);
-                        if (jsEnabled && !src.empty() && scriptCount < 128 && totalScriptBytes <= 256 * 1024) {
-                            g_js.runScript(src, "inline");
+                        if (jsEnabled && !source.empty() && scriptCount < 128 && totalScriptBytes <= 256 * 1024) {
+                            const std::string filename = n->attr("__helix_script_filename");
+                            g_js.runScript(source, filename.empty() ? "inline" : filename);
                         }
                         ++scriptCount;
                     }
