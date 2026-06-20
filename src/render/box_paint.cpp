@@ -122,14 +122,53 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
         std::string url = ResolveUrl(s.backgroundImage, m_curBaseUrl);
         auto it = m_images.find(url);
         if (it != m_images.end() && it->second) {
-            ID2D1BitmapBrush* brush = nullptr;
-            D2D1_EXTEND_MODE ext = s.bgNoRepeat ? D2D1_EXTEND_MODE_CLAMP : D2D1_EXTEND_MODE_WRAP;
-            if (SUCCEEDED(m_rt->CreateBitmapBrush(it->second,
-                    D2D1::BitmapBrushProperties(ext, ext,
-                        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR), &brush)) && brush) {
-                brush->SetTransform(D2D1::Matrix3x2F::Translation(sx, sy));
-                m_rt->FillRectangle(D2D1::RectF(sx, sy, sx + bw, sy + bh), brush);
-                brush->Release();
+            D2D1_SIZE_F isz = it->second->GetSize();
+            float iw = isz.width, ih = isz.height;
+            if (iw > 0 && ih > 0 && bw > 0 && bh > 0) {
+                // 1) Tile size from background-size.
+                float tw = iw, th = ih;
+                if (s.bgSizeMode == 1) {                 // cover
+                    float sc = std::max(bw / iw, bh / ih); tw = iw * sc; th = ih * sc;
+                } else if (s.bgSizeMode == 2) {          // contain
+                    float sc = std::min(bw / iw, bh / ih); tw = iw * sc; th = ih * sc;
+                } else if (s.bgSizeMode == 3) {          // explicit length/%
+                    float w = s.bgSizeWPct ? bw * (s.bgSizeW / 100.f)
+                            : (s.bgSizeW >= 0 ? s.bgSizeW * m_zoom : -1.f);
+                    float h = s.bgSizeHPct ? bh * (s.bgSizeH / 100.f)
+                            : (s.bgSizeH >= 0 ? s.bgSizeH * m_zoom : -1.f);
+                    if (w < 0 && h < 0) { w = iw; h = ih; }
+                    else if (w < 0)     { w = iw * (h / ih); }
+                    else if (h < 0)     { h = ih * (w / iw); }
+                    tw = w; th = h;
+                }
+                // 2) Offset from background-position (percentages align the P%
+                //    point of the tile with the P% point of the box).
+                float ox = s.bgPosXPct ? (bw - tw) * (s.bgPosX / 100.f) : s.bgPosX * m_zoom;
+                float oy = s.bgPosYPct ? (bh - th) * (s.bgPosY / 100.f) : s.bgPosY * m_zoom;
+
+                D2D1_RECT_F clip = D2D1::RectF(sx, sy, sx + bw, sy + bh);
+                m_rt->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
+                int rep = s.bgRepeatSet ? s.bgRepeat : (s.bgNoRepeat ? 3 : 0);
+                if (rep == 3) {
+                    m_rt->DrawBitmap(it->second,
+                        D2D1::RectF(sx + ox, sy + oy, sx + ox + tw, sy + oy + th));
+                } else {
+                    bool repX = (rep == 0 || rep == 1);
+                    bool repY = (rep == 0 || rep == 2);
+                    float startX = sx + ox, startY = sy + oy;
+                    if (repX) while (startX > sx) startX -= tw;
+                    if (repY) while (startY > sy) startY -= th;
+                    if (tw < 1.f) tw = 1.f;
+                    if (th < 1.f) th = 1.f;
+                    for (float y = startY; y < sy + bh; y += th) {
+                        for (float x = startX; x < sx + bw; x += tw) {
+                            m_rt->DrawBitmap(it->second, D2D1::RectF(x, y, x + tw, y + th));
+                            if (!repX) break;
+                        }
+                        if (!repY) break;
+                    }
+                }
+                m_rt->PopAxisAlignedClip();
             }
         } else {
             const_cast<Renderer*>(this)->RequestImage(url);

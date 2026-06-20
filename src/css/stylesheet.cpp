@@ -298,6 +298,70 @@ CssColor ParseCssColor(const std::string& raw) {
 
 // ─── declaration parsing (shared between inline and stylesheet) ───────────────
 
+// Parse one background-position component into (value, isPercent). Keywords map
+// to percentages (left/top=0%, center=50%, right/bottom=100%).
+static bool ParseBgPosComponent(const std::string& tok, float& outVal, bool& outPct) {
+    if (tok == "left" || tok == "top")    { outVal = 0;   outPct = true; return true; }
+    if (tok == "center")                  { outVal = 50;  outPct = true; return true; }
+    if (tok == "right" || tok == "bottom"){ outVal = 100; outPct = true; return true; }
+    if (!tok.empty() && tok.back() == '%') {
+        try { outVal = std::stof(tok.substr(0, tok.size() - 1)); outPct = true; return true; }
+        catch (...) { return false; }
+    }
+    float px = ParseLength(tok);
+    if (px > -1e5f) { outVal = px; outPct = false; return true; }
+    return false;
+}
+
+static void ParseBgPosition(const std::string& v, ComputedStyle& out) {
+    std::istringstream ss(v);
+    std::vector<std::string> toks; std::string t;
+    while (ss >> t) toks.push_back(t);
+    if (toks.empty()) return;
+    float x = 0, y = 0; bool xp = true, yp = true;
+    bool okX = false, okY = false;
+    if (toks.size() == 1) {
+        if (toks[0] == "top" || toks[0] == "bottom") {
+            okY = ParseBgPosComponent(toks[0], y, yp); x = 50; xp = true; okX = true;
+        } else {
+            okX = ParseBgPosComponent(toks[0], x, xp); y = 50; yp = true; okY = true;
+        }
+    } else {
+        std::string a = toks[0], b = toks[1];
+        if (a == "top" || a == "bottom" || b == "left" || b == "right") std::swap(a, b);
+        okX = ParseBgPosComponent(a, x, xp);
+        okY = ParseBgPosComponent(b, y, yp);
+    }
+    if (okX && okY) {
+        out.bgPosX = x; out.bgPosY = y; out.bgPosXPct = xp; out.bgPosYPct = yp;
+        out.bgPosSet = true;
+    }
+}
+
+static void ParseBgSize(const std::string& v, ComputedStyle& out) {
+    if (v == "cover")   { out.bgSizeMode = 1; out.bgSizeSet = true; return; }
+    if (v == "contain") { out.bgSizeMode = 2; out.bgSizeSet = true; return; }
+    std::istringstream ss(v);
+    std::vector<std::string> toks; std::string t;
+    while (ss >> t) toks.push_back(t);
+    if (toks.empty()) return;
+    auto parseDim = [](const std::string& tok, float& outVal, bool& outPct) -> bool {
+        if (tok == "auto") { outVal = -1; outPct = false; return true; }
+        if (!tok.empty() && tok.back() == '%') {
+            try { outVal = std::stof(tok.substr(0, tok.size() - 1)); outPct = true; return true; }
+            catch (...) { return false; }
+        }
+        float px = ParseLength(tok);
+        if (px > -1e5f) { outVal = px; outPct = false; return true; }
+        return false;
+    };
+    float w = -1, h = -1; bool wp = false, hp = false;
+    if (!parseDim(toks[0], w, wp)) return;
+    if (toks.size() > 1) { if (!parseDim(toks[1], h, hp)) return; }
+    out.bgSizeMode = 3; out.bgSizeW = w; out.bgSizeH = h;
+    out.bgSizeWPct = wp; out.bgSizeHPct = hp; out.bgSizeSet = true;
+}
+
 static void ApplyDeclaration(const std::string& prop,
                              const std::string& val,
                              ComputedStyle& out) {
@@ -320,14 +384,19 @@ static void ApplyDeclaration(const std::string& prop,
                 bgImg = stripQuotes(sTrim(val.substr(us + 4, ue - us - 4)));
         }
         CssColor bg; int colorCount = 0; bool invalid = false;
+        int repeat = -1;                       // -1 = unspecified
+        std::vector<std::string> posToks;      // background-position candidates
+        std::string sizeStr;                   // text after '/' (background-size)
+        bool afterSlash = false;
         {
             size_t i = 0;
             while (i < val.size()) {
                 while (i < val.size() && std::isspace((unsigned char)val[i])) i++;
                 if (i >= val.size()) break;
+                if (val[i] == '/') { afterSlash = true; i++; continue; }
                 // Paren-aware token: don't split inside url()/rgb()/hsl().
                 size_t j = i; int depth = 0;
-                while (j < val.size() && (depth > 0 || !std::isspace((unsigned char)val[j]))) {
+                while (j < val.size() && (depth > 0 || (!std::isspace((unsigned char)val[j]) && val[j] != '/'))) {
                     if (val[j] == '(') depth++;
                     else if (val[j] == ')' && depth > 0) depth--;
                     j++;
@@ -336,19 +405,26 @@ static void ApplyDeclaration(const std::string& prop,
                 std::string tl = sLower(tok);
                 i = j;
                 if (tl.rfind("url(", 0) == 0) continue;   // image handled above
-                bool keyword = (tl == "no-repeat" || tl == "repeat" || tl == "repeat-x"
-                    || tl == "repeat-y" || tl == "center" || tl == "top" || tl == "bottom"
-                    || tl == "left" || tl == "right" || tl == "cover" || tl == "contain"
-                    || tl == "fixed" || tl == "scroll" || tl == "local" || tl == "none"
+                if (tl == "no-repeat") { repeat = 3; continue; }
+                if (tl == "repeat")    { repeat = 0; continue; }
+                if (tl == "repeat-x")  { repeat = 1; continue; }
+                if (tl == "repeat-y")  { repeat = 2; continue; }
+                if (afterSlash || tl == "cover" || tl == "contain") {
+                    sizeStr += (sizeStr.empty() ? "" : " ") + tl; continue;
+                }
+                bool posKeyword = (tl == "center" || tl == "top" || tl == "bottom"
+                    || tl == "left" || tl == "right");
+                bool lengthish = !tl.empty() && (std::isdigit((unsigned char)tl[0])
+                    || tl[0] == '-' || tl[0] == '+' || tl.find('%') != std::string::npos);
+                if (posKeyword || lengthish) { posToks.push_back(tl); continue; }
+                bool keyword = (tl == "fixed" || tl == "scroll" || tl == "local" || tl == "none"
                     || tl == "inherit" || tl == "border-box" || tl == "padding-box"
                     || tl == "content-box");
                 if (tl == "transparent") { bg = {true,0,0,0,0}; colorCount++; }
                 else if (!keyword) {
                     CssColor c = ParseCssColor(tok);
                     if (c.valid) { bg = c; colorCount++; }
-                    else if (tl.find('%') == std::string::npos && tl.find("px") == std::string::npos
-                             && !tl.empty() && !std::isdigit((unsigned char)tl[0]))
-                        invalid = true;   // unknown token (e.g. a second colour name)
+                    else invalid = true;   // unknown token (e.g. a second colour name)
                 }
             }
         }
@@ -361,6 +437,12 @@ static void ApplyDeclaration(const std::string& prop,
             out.bgFixed = fixed;
             out.bgColor = bg;
             out.bgColorSet = true;
+            if (repeat >= 0) { out.bgRepeat = repeat; out.bgNoRepeat = (repeat == 3); out.bgRepeatSet = true; }
+            if (!posToks.empty()) {
+                std::string p; for (auto& t : posToks) p += (p.empty() ? "" : " ") + t;
+                ParseBgPosition(p, out);
+            }
+            if (!sizeStr.empty()) ParseBgSize(sizeStr, out);
         }
     } else if (prop == "background-image") {
         std::string low = sLower(val);
@@ -373,6 +455,16 @@ static void ApplyDeclaration(const std::string& prop,
                 out.backgroundImage = stripQuotes(url);
             }
         }
+    } else if (prop == "background-repeat") {
+        std::string v = sLower(sTrim(val));
+        out.bgRepeat = (v == "no-repeat") ? 3 : (v == "repeat-x") ? 1
+                     : (v == "repeat-y") ? 2 : 0;
+        out.bgNoRepeat = (out.bgRepeat == 3);
+        out.bgRepeatSet = true;
+    } else if (prop == "background-position") {
+        ParseBgPosition(sLower(sTrim(val)), out);
+    } else if (prop == "background-size") {
+        ParseBgSize(sLower(sTrim(val)), out);
     } else if (prop == "font-size") {
         std::string v = sLower(sTrim(val));
         if      (v == "small")    out.fontSize = 12;

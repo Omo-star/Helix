@@ -3,6 +3,8 @@
 #include "css/stylesheet.h"
 #include "html/parser.h"
 
+#include <cstdio>
+
 static const Node* FindFirstElement(const Node* node, const std::string& tag) {
     if (!node) return nullptr;
     if (node->type == NodeType::Element && node->tagName == tag) return node;
@@ -142,6 +144,40 @@ TestResult RunCssTests() {
         ExpectEqual("css/cascade/data-uri-background",
             actual,
             "bg=1,0,0,1 width=64 height=32 backgroundImage=data:image/png;base64,QUJDRA%3D%3D \n",
+            result);
+    }
+
+    {
+        // CSS sprite: background-position (negative offset), -size, -repeat parse.
+        auto dom = ParseHtml("<html><body><i id=\"icon\"></i></body></html>");
+        auto sheet = ParseStylesheet(
+            "#icon { background-image: url(sprite.png); background-position: -40px -80px;"
+            " background-size: 200px 100px; background-repeat: no-repeat; }");
+        auto* node = FindElementById(dom.get(), "icon");
+        auto cs = sheet.resolve(node);
+        char buf[256];
+        snprintf(buf, sizeof buf,
+            "repeat=%d posX=%g posY=%g sizeMode=%d sizeW=%g sizeH=%g\n",
+            cs.bgRepeat, cs.bgPosX, cs.bgPosY, cs.bgSizeMode, cs.bgSizeW, cs.bgSizeH);
+        ExpectEqual("css/background/sprite-longhand",
+            std::string(buf),
+            "repeat=3 posX=-40 posY=-80 sizeMode=3 sizeW=200 sizeH=100\n",
+            result);
+    }
+
+    {
+        // Shorthand carries position + repeat: "url() <x> <y> no-repeat".
+        auto dom = ParseHtml("<html><body><i id=\"s\"></i></body></html>");
+        auto sheet = ParseStylesheet(
+            "#s { background: url(sprite.png) -12px -34px no-repeat; }");
+        auto* node = FindElementById(dom.get(), "s");
+        auto cs = sheet.resolve(node);
+        char buf[256];
+        snprintf(buf, sizeof buf, "repeat=%d posX=%g posY=%g img=%d\n",
+            cs.bgRepeat, cs.bgPosX, cs.bgPosY, cs.backgroundImageSet ? 1 : 0);
+        ExpectEqual("css/background/sprite-shorthand",
+            std::string(buf),
+            "repeat=3 posX=-12 posY=-34 img=1\n",
             result);
     }
 

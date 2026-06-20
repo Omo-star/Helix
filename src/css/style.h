@@ -20,6 +20,20 @@ struct ComputedStyle {
     bool     backgroundImageSet = false;
     bool     bgNoRepeat   = false;
     bool     bgFixed      = false;
+    // Background placement (CSS sprites). repeat: 0=repeat,1=repeat-x,2=repeat-y,3=no-repeat.
+    int      bgRepeat     = 0;
+    bool     bgRepeatSet  = false;
+    float    bgPosX       = 0;     // position offset; px unless bgPosXPct
+    float    bgPosY       = 0;
+    bool     bgPosXPct    = false; // bgPosX is a percentage (0..100)
+    bool     bgPosYPct    = false;
+    bool     bgPosSet     = false;
+    int      bgSizeMode   = 0;     // 0=auto, 1=cover, 2=contain, 3=length
+    float    bgSizeW      = -1;    // when mode=length (px; -1=auto dimension)
+    float    bgSizeH      = -1;
+    bool     bgSizeWPct   = false;
+    bool     bgSizeHPct   = false;
+    bool     bgSizeSet    = false;
     float    fontSize     = 0;
     bool     bold         = false;
     bool     boldSet      = false;
@@ -125,6 +139,21 @@ struct ComputedStyle {
             out.backgroundImageSet = true;
             out.bgNoRepeat = child.bgNoRepeat;
             out.bgFixed = child.bgFixed;
+        }
+        if (child.bgRepeatSet) {
+            out.bgRepeat = child.bgRepeat; out.bgNoRepeat = (child.bgRepeat == 3);
+            out.bgRepeatSet = true;
+        }
+        if (child.bgPosSet) {
+            out.bgPosX = child.bgPosX; out.bgPosY = child.bgPosY;
+            out.bgPosXPct = child.bgPosXPct; out.bgPosYPct = child.bgPosYPct;
+            out.bgPosSet = true;
+        }
+        if (child.bgSizeSet) {
+            out.bgSizeMode = child.bgSizeMode;
+            out.bgSizeW = child.bgSizeW; out.bgSizeH = child.bgSizeH;
+            out.bgSizeWPct = child.bgSizeWPct; out.bgSizeHPct = child.bgSizeHPct;
+            out.bgSizeSet = true;
         }
         if (child.fontSize > 0)      out.fontSize  = child.fontSize;
         if (child.boldSet)   { out.bold = child.bold; out.boldSet = true; }
