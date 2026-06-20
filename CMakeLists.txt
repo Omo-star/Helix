@@ -11,6 +11,9 @@ if (MSVC)
     string(REGEX REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
     string(REGEX REPLACE "/EHs" ""  CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
     add_compile_options(/EHa)
+    # Read source files as UTF-8 so literal chars (×, •, …) in L"" literals aren't
+    # mangled to mojibake (e.g. "Ã—") under the system codepage.
+    add_compile_options(/utf-8)
 endif()
 
 add_library(helix_engine STATIC
