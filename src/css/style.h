@@ -63,10 +63,13 @@ struct ComputedStyle {
     float    height       = -1;
     float    heightPercent = -1;
     float    maxWidth     = -1;
+    float    maxWidthPercent = -1;
     float    minWidth     = -1;
+    float    minWidthPercent = -1;
     float    minHeight    = -1;
     float    minHeightPercent = -1;
     float    maxHeight    = -1;
+    float    maxHeightPercent = -1;
     // Generated content. This is only meaningful for :before/:after boxes.
     bool     contentSet   = false;
     std::string content;
@@ -156,10 +159,13 @@ struct ComputedStyle {
         if (child.height       >= 0) out.height    = child.height;
         if (child.heightPercent >= 0) out.heightPercent = child.heightPercent;
         if (child.maxWidth     >= 0) out.maxWidth  = child.maxWidth;
+        if (child.maxWidthPercent >= 0) out.maxWidthPercent = child.maxWidthPercent;
         if (child.minWidth     >= 0) out.minWidth  = child.minWidth;
+        if (child.minWidthPercent >= 0) out.minWidthPercent = child.minWidthPercent;
         if (child.minHeight    >= 0) out.minHeight = child.minHeight;
         if (child.minHeightPercent >= 0) out.minHeightPercent = child.minHeightPercent;
         if (child.maxHeight    >= 0) out.maxHeight = child.maxHeight;
+        if (child.maxHeightPercent >= 0) out.maxHeightPercent = child.maxHeightPercent;
         if (child.contentSet) { out.contentSet = true; out.content = child.content; }
         if (child.floatMode    != 0) out.floatMode = child.floatMode;
         if (child.floatInherit)      out.floatInherit = true;

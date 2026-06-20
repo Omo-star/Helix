@@ -654,15 +654,21 @@ static void ApplyDeclaration(const std::string& prop,
         if (pct >= 0) out.heightPercent = pct;
         else { float f = ParseLength(val); if (f >= 0) out.height = f; }
     } else if (prop == "max-width") {
-        float f = ParseLength(val); if (f >= 0) out.maxWidth = f;
+        float pct = ParsePercentage(val);
+        if (pct >= 0) out.maxWidthPercent = pct;
+        else { float f = ParseLength(val); if (f >= 0) out.maxWidth = f; }
     } else if (prop == "min-width") {
-        float f = ParseLength(val); if (f >= 0) out.minWidth = f;
+        float pct = ParsePercentage(val);
+        if (pct >= 0) out.minWidthPercent = pct;
+        else { float f = ParseLength(val); if (f >= 0) out.minWidth = f; }
     } else if (prop == "min-height") {
         float pct = ParsePercentage(val);
         if (pct >= 0) out.minHeightPercent = pct;
         else { float f = ParseLength(val); if (f >= 0) out.minHeight = f; }
     } else if (prop == "max-height") {
-        float f = ParseLength(val); if (f >= 0) out.maxHeight = f;
+        float pct = ParsePercentage(val);
+        if (pct >= 0) out.maxHeightPercent = pct;
+        else { float f = ParseLength(val); if (f >= 0) out.maxHeight = f; }
     } else if (prop == "content") {
         std::string v = sLower(sTrim(val));
         out.contentSet = v != "none" && v != "normal";

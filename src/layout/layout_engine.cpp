@@ -460,6 +460,17 @@ struct Engine {
         if (s.heightPercent >= 0 && cbH >= 0) return cbH * (s.heightPercent / 100.f);
         return -1;  // auto
     }
+    // Resolve max/min-width against the containing block width (-1 = none).
+    float usedMaxWidth(const ComputedStyle& s, float cbW) {
+        if (s.maxWidth >= 0) return px(s.maxWidth);
+        if (s.maxWidthPercent >= 0) return cbW * (s.maxWidthPercent / 100.f);
+        return -1;
+    }
+    float usedMinWidth(const ComputedStyle& s, float cbW) {
+        if (s.minWidth >= 0) return px(s.minWidth);
+        if (s.minWidthPercent >= 0) return cbW * (s.minWidthPercent / 100.f);
+        return -1;
+    }
 
     // Horizontal margin+border+padding of a box, in device px (auto margins → 0).
     float hExtra(const ComputedStyle& s) {
@@ -600,8 +611,8 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         }
     }
     // min/max width clamp.
-    if (s.maxWidth >= 0) w = std::min(w, px(s.maxWidth));
-    if (s.minWidth >= 0) w = std::max(w, px(s.minWidth));
+    { float mw = usedMaxWidth(s, cbW); if (mw >= 0) w = std::min(w, mw); }
+    { float nw = usedMinWidth(s, cbW); if (nw >= 0) w = std::max(w, nw); }
     box.contentW = w;
 
     // Auto-margin horizontal centering for block-level with definite width.
