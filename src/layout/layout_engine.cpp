@@ -1412,9 +1412,10 @@ void ApplyRelativeOffsets(Engine& E, LayoutBox& box) {
 std::unique_ptr<LayoutBox> LayoutDocument(const LayoutInput& in) {
     if (!in.document) return nullptr;
 
-    if (in.sheet)
-        in.sheet->setViewport(in.viewportW / std::max(0.01f, in.zoom),
-                              in.viewportH / std::max(0.01f, in.zoom));
+    float cssW = in.viewportW / std::max(0.01f, in.zoom);
+    float cssH = in.viewportH / std::max(0.01f, in.zoom);
+    if (in.sheet) in.sheet->setViewport(cssW, cssH);
+    SetCssViewport(cssW, cssH);
 
     BuildCtx bc{ in.sheet, in.measure, in.zoom, in.baseUrl };
 

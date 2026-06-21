@@ -76,5 +76,6 @@ struct Stylesheet {
 Stylesheet ParseStylesheet(const std::string& css);
 ComputedStyle ParseInlineStyle(const std::string& style);
 void ResolveStyleVariables(ComputedStyle& style);
+void SetCssViewport(float w, float h);
 std::string SerializeStylesheet(const Stylesheet& sheet);
 std::string SerializeComputedStyle(const ComputedStyle& style);

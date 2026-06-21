@@ -11,6 +11,13 @@
 // inherited font size of unrelated selectors.
 static float g_emBase = 16.f;
 
+// Viewport dimensions for vw/vh/vmin/vmax units. Set by the layout engine
+// before style resolution so CSS lengths resolve against the real window.
+static float g_viewportW = 800.f;
+static float g_viewportH = 600.f;
+
+void SetCssViewport(float w, float h) { g_viewportW = w; g_viewportH = h; }
+
 // Parse a CSS length into pixels.  Returns -1 for inherit/auto/none/unknown.
 static float ParseLength(const std::string& raw, float emBase = -1.f) {
     if (emBase < 0.f) emBase = g_emBase;
@@ -23,6 +30,37 @@ static float ParseLength(const std::string& raw, float emBase = -1.f) {
     if (low == "inherit" || low == "initial" || low == "unset" || low == "normal") return -1;
     if (low == "none" || low == "auto") return -1;
     if (low == "0") return 0;
+    // calc(): evaluate simple binary expressions like calc(100vw - 40px).
+    if (low.rfind("calc(", 0) == 0 && low.back() == ')') {
+        std::string inner = s.substr(5, s.size() - 6);
+        // Find the operator (+/-) that isn't inside parens and isn't a sign.
+        size_t opPos = std::string::npos;
+        char op = 0;
+        int depth = 0;
+        for (size_t j = 1; j < inner.size(); ++j) {
+            if (inner[j] == '(') depth++;
+            else if (inner[j] == ')') { if (depth > 0) depth--; }
+            else if (depth == 0 && (inner[j] == '+' || inner[j] == '-')
+                     && j > 0 && inner[j-1] == ' ') {
+                opPos = j; op = inner[j]; break;
+            } else if (depth == 0 && inner[j] == '*') { opPos = j; op = '*'; break; }
+            else if (depth == 0 && inner[j] == '/') { opPos = j; op = '/'; break; }
+        }
+        if (opPos != std::string::npos && op) {
+            float a = ParseLength(inner.substr(0, opPos), emBase);
+            float b = ParseLength(inner.substr(opPos + 1), emBase);
+            if (a > -1e5f && b > -1e5f) {
+                if (op == '+') return a + b;
+                if (op == '-') return a - b;
+                if (op == '*') return a * b;
+                if (op == '/' && b != 0) return a / b;
+            }
+        }
+        // Single-term calc(100vw) etc.
+        float single = ParseLength(inner, emBase);
+        if (single > -1e5f) return single;
+        return -1;
+    }
     // CSS border-width keywords
     if (low == "thin")   return 1.f;
     if (low == "medium") return 3.f;
@@ -49,8 +87,11 @@ static float ParseLength(const std::string& raw, float emBase = -1.f) {
     if (unit == "cm")  return num * (96.f / 2.54f);
     if (unit == "mm")  return num * (96.f / 25.4f);
     if (unit == "ex" || unit == "ch") return num * 8.f;
-    if (unit == "%")   return num * 0.16f;  // rough: 100% ≈ 16px base
-    if (unit == "vw" || unit == "vh") return num * 8.f; // rough viewport
+    if (unit == "%")   return num * 0.16f;  // rough: 100% = 16px base
+    if (unit == "vw")   return num * (g_viewportW / 100.f);
+    if (unit == "vh")   return num * (g_viewportH / 100.f);
+    if (unit == "vmin") return num * (std::min(g_viewportW, g_viewportH) / 100.f);
+    if (unit == "vmax") return num * (std::max(g_viewportW, g_viewportH) / 100.f);
     return num;  // unrecognized unit, treat as px
 }
 
@@ -863,7 +904,7 @@ static void ApplyDeclaration(const std::string& prop,
         if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
             { out.left = ParseLength(val); out.leftSet = true; }
     } else if (prop == "opacity") {
-        // not stored separately — could multiply into color alpha
+        try { out.opacity = std::stof(sTrim(val)); out.opacitySet = true; } catch (...) {}
     } else if (prop == "visibility") {
         std::string v = sLower(sTrim(val));
         out.visibilitySet = true;

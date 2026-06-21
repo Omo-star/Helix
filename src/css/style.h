@@ -109,6 +109,8 @@ struct ComputedStyle {
     bool     leftSet      = false;
     // Visibility
     bool     visibilityHidden = false;
+    float    opacity          = 1.f;
+    bool     opacitySet       = false;
     bool     visibilitySet    = false;
     // List style
     bool     listStyleNone    = false;
@@ -224,6 +226,7 @@ struct ComputedStyle {
         if (child.bottomSet) { out.bottom = child.bottom; out.bottomSet = true; }
         if (child.leftSet)   { out.left   = child.left;   out.leftSet   = true; }
         if (child.visibilitySet) { out.visibilityHidden = child.visibilityHidden; out.visibilitySet = true; }
+        if (child.opacitySet) { out.opacity = child.opacity; out.opacitySet = true; }
         if (child.listStyleSet) { out.listStyleNone = child.listStyleNone; out.listStyleSet = true; }
         if (child.borderSpacing >= 0) out.borderSpacing = child.borderSpacing;
         if (child.flexDirectionSet) {

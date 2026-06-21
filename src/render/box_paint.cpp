@@ -310,7 +310,8 @@ void Renderer::PaintBox(const LayoutBox& box, float scrollY, float topInset, boo
     bool fixed = underFixed || box.style.positionMode == 3;
     float effScroll = fixed ? 0.f : scrollY;
 
-    bool hidden = box.style.visibilitySet && box.style.visibilityHidden;
+    bool hidden = (box.style.visibilitySet && box.style.visibilityHidden)
+                || (box.style.opacitySet && box.style.opacity < 0.01f);
 
     // 1. This box's own background / borders / replaced content / marker.
     if (!hidden && box.kind != BoxKind::Text && box.kind != BoxKind::Inline
