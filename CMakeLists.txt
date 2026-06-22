@@ -54,31 +54,53 @@ add_library(helix_engine STATIC
 
 target_include_directories(helix_engine PUBLIC src)
 target_link_libraries(helix_engine PUBLIC CURL::libcurl)
-target_compile_definitions(helix_engine PUBLIC
-    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX CURL_STATICLIB
-)
+target_compile_definitions(helix_engine PUBLIC CURL_STATICLIB)
+if (WIN32)
+    target_compile_definitions(helix_engine PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
 if (MSVC)
     # /EHa: catch SEH exceptions (stack overflow, access violation) in catch(...)
     target_compile_options(helix_engine PUBLIC /EHa)
 endif()
 
-add_executable(Helix WIN32
-    src/main.cpp
-    src/render/renderer.cpp
-    src/render/box_paint.cpp
-)
+# ── platform backends ─────────────────────────────────────────────────────────
+# Each OS gets its own renderer + windowing backend. The engine library is
+# platform-independent; only these files differ per OS.
 
-target_include_directories(Helix PRIVATE src)
-
-target_link_libraries(Helix PRIVATE
-    helix_engine d2d1 dwrite comctl32 ole32
-)
-
-# Reserve a large stack (64 MB). Real pages can drive the JS engine and DOM
-# registration into very deep recursion; the default 1 MB stack overflows and
-# crashes (a stack overflow cannot be caught by C++ exception handling).
-if (MSVC)
-    target_link_options(Helix PRIVATE /STACK:67108864)
+if (WIN32)
+    add_executable(Helix WIN32
+        src/main.cpp
+        src/render/renderer.cpp
+        src/render/box_paint.cpp
+        src/platform/platform_win32.cpp
+    )
+    target_include_directories(Helix PRIVATE src)
+    target_link_libraries(Helix PRIVATE
+        helix_engine d2d1 dwrite comctl32 ole32
+    )
+    if (MSVC)
+        target_link_options(Helix PRIVATE /STACK:67108864)
+    endif()
+elseif (APPLE)
+    add_executable(Helix MACOSX_BUNDLE
+        src/platform/platform_macos.mm
+    )
+    target_include_directories(Helix PRIVATE src)
+    target_link_libraries(Helix PRIVATE
+        helix_engine
+        "-framework Cocoa"
+        "-framework CoreGraphics"
+        "-framework CoreText"
+    )
+elseif (UNIX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+    add_executable(Helix
+        src/platform/platform_linux.cpp
+    )
+    target_include_directories(Helix PRIVATE src ${GTK3_INCLUDE_DIRS})
+    target_link_libraries(Helix PRIVATE helix_engine ${GTK3_LIBRARIES})
+    target_compile_options(Helix PRIVATE ${GTK3_CFLAGS_OTHER})
 endif()
 
 add_executable(helix-tests
