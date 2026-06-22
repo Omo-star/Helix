@@ -12,7 +12,9 @@ public:
     }
     float SpaceWidth(const FontKey&) override { return 4.f; }
     bool ImageIntrinsic(const std::string&, float&, float&) override { return false; }
-    void RequestImage(const std::string&) override {}
+    void RequestImage(const std::string& url) override { requestedImages.push_back(url); }
+
+    std::vector<std::string> requestedImages;
 };
 
 LayoutBox* FindEngineBoxById(LayoutBox* box, const std::string& id) {
@@ -56,6 +58,50 @@ TestResult RunLayoutEngineTests() {
             + " columnDelta=" + std::to_string(columnDelta) + "\n",
         "found rowDelta=105 rowWidth=95 columnDelta=30\n",
         result);
+
+    {
+        auto lazyDom = ParseHtml(
+            "<html><body><img src=\"data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==\" "
+            "data-src=\"/images/photo.jpg\"></body></html>");
+        auto lazySheet = ParseStylesheet("");
+        FixedMeasure lazyMeasure;
+        LayoutInput lazyInput;
+        lazyInput.document = lazyDom.get();
+        lazyInput.sheet = &lazySheet;
+        lazyInput.measure = &lazyMeasure;
+        lazyInput.viewportW = 320.f;
+        lazyInput.viewportH = 480.f;
+        lazyInput.baseUrl = "https://example.test/articles/start.html";
+        LayoutDocument(lazyInput);
+        const std::string requested = lazyMeasure.requestedImages.empty()
+            ? "none\n" : lazyMeasure.requestedImages.front() + "\n";
+        ExpectEqual("layout-engine/lazy-image-prefers-real-data-src-over-data-placeholder",
+            requested,
+            "https://example.test/images/photo.jpg\n",
+            result);
+    }
+
+    {
+        auto pictureDom = ParseHtml(
+            "<html><body><picture><source srcset=\"/images/cover.png 1x\">"
+            "<img id=\"cover\"></picture></body></html>");
+        auto pictureSheet = ParseStylesheet("");
+        FixedMeasure pictureMeasure;
+        LayoutInput pictureInput;
+        pictureInput.document = pictureDom.get();
+        pictureInput.sheet = &pictureSheet;
+        pictureInput.measure = &pictureMeasure;
+        pictureInput.viewportW = 320.f;
+        pictureInput.viewportH = 480.f;
+        pictureInput.baseUrl = "https://example.test/articles/start.html";
+        LayoutDocument(pictureInput);
+        const std::string requested = pictureMeasure.requestedImages.empty()
+            ? "none\n" : pictureMeasure.requestedImages.front() + "\n";
+        ExpectEqual("layout-engine/picture-source-provides-image-when-img-has-no-src",
+            requested,
+            "https://example.test/images/cover.png\n",
+            result);
+    }
 
     {
         auto gridDom = ParseHtml(
@@ -181,6 +227,46 @@ TestResult RunLayoutEngineTests() {
                 + " col1After=" + (col1After ? "1" : "0")
                 + " spans=" + (spans ? "1" : "0") + "\n",
             "ok col0Aligned=1 col1After=1 spans=1\n",
+            result);
+    }
+
+    // align-items: center positions a short flex item in the middle of the
+    // line's cross axis (defined by the tallest item).
+    {
+        auto adom = ParseHtml(
+            "<html><body><div id=\"f\"><div id=\"tall\"></div><div id=\"short\"></div></div></body></html>");
+        auto asheet = ParseStylesheet(
+            "#f { display:flex; align-items:center; width:200px; }"
+            "#tall { width:40px; height:100px; }"
+            "#short { width:40px; height:20px; }");
+        LayoutInput ain; ain.document = adom.get(); ain.sheet = &asheet;
+        ain.measure = &measure; ain.viewportW = 320.f; ain.viewportH = 480.f;
+        auto al = LayoutDocument(ain);
+        auto* tall = FindEngineBoxById(al.get(), "tall");
+        auto* shortBox = FindEngineBoxById(al.get(), "short");
+        bool ok = tall && shortBox;
+        // short (20px) centered in a 100px line → offset (100-20)/2 = 40px below tall's top.
+        int delta = ok ? (int)(shortBox->y - tall->y + .5f) : -1;
+        ExpectEqual("layout-engine/flex-align-items-center",
+            std::string(ok ? "ok " : "missing ") + "delta=" + std::to_string(delta) + "\n",
+            "ok delta=40\n",
+            result);
+    }
+
+    // width:max-content shrinks a block to its content instead of filling.
+    {
+        auto mdom = ParseHtml(
+            "<html><body><div id=\"mc\">hello</div></body></html>");
+        auto msheet = ParseStylesheet("#mc { width:max-content; }");
+        LayoutInput min; min.document = mdom.get(); min.sheet = &msheet;
+        min.measure = &measure; min.viewportW = 800.f; min.viewportH = 480.f;
+        auto ml = LayoutDocument(min);
+        auto* mc = FindEngineBoxById(ml.get(), "mc");
+        // "hello" = 5 chars * 8px (FixedMeasure) = 40px, not the 800px viewport.
+        bool ok = mc && mc->contentW > 1.f && mc->contentW < 100.f;
+        ExpectEqual("layout-engine/width-max-content-shrinks-to-content",
+            std::string(ok ? "shrunk" : "filled") + "\n",
+            "shrunk\n",
             result);
     }
     return result;

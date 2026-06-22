@@ -88,7 +88,7 @@ bool Renderer::ImageIntrinsic(const std::string& url, float& w, float& h) {
 }
 
 void Renderer::RequestImage(const std::string& url) {
-    if (url.empty() || m_loadingImages.count(url)) return;
+    if (url.empty() || m_loadingImages.count(url) || m_failedImages.count(url)) return;
     m_loadingImages.insert(url);
     if (m_imageRequestCb) m_imageRequestCb(url);
 }
@@ -188,7 +188,34 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
         if (it != m_images.end() && it->second) {
             float cx = box.contentX();
             float cy = box.contentY() - scrollY + topInset;
-            m_rt->DrawBitmap(it->second, D2D1::RectF(cx, cy, cx + box.contentW, cy + box.contentH));
+            float bw2 = box.contentW, bh2 = box.contentH;
+            D2D1_SIZE_F isz = it->second->GetSize();
+            float iw = isz.width, ih = isz.height;
+            int fit = box.style.objectFit;
+            if (fit != 0 && iw > 0 && ih > 0 && bw2 > 0 && bh2 > 0) {
+                // contain/cover/none/scale-down: preserve aspect ratio, center,
+                // and clip to the content box (cover/none may overflow).
+                float dw = bw2, dh = bh2;
+                if (fit == 1 || fit == 4) {               // contain / scale-down
+                    float sc = std::min(bw2 / iw, bh2 / ih);
+                    if (fit == 4) sc = std::min(sc, 1.f); // scale-down never enlarges
+                    dw = iw * sc; dh = ih * sc;
+                } else if (fit == 2) {                    // cover
+                    float sc = std::max(bw2 / iw, bh2 / ih);
+                    dw = iw * sc; dh = ih * sc;
+                } else if (fit == 3) {                    // none: native size
+                    dw = iw; dh = ih;
+                }
+                float ox = cx + (bw2 - dw) / 2.f;
+                float oy = cy + (bh2 - dh) / 2.f;
+                bool clip = (dw > bw2 + 0.5f || dh > bh2 + 0.5f);
+                if (clip) m_rt->PushAxisAlignedClip(
+                    D2D1::RectF(cx, cy, cx + bw2, cy + bh2), D2D1_ANTIALIAS_MODE_ALIASED);
+                m_rt->DrawBitmap(it->second, D2D1::RectF(ox, oy, ox + dw, oy + dh));
+                if (clip) m_rt->PopAxisAlignedClip();
+            } else {
+                m_rt->DrawBitmap(it->second, D2D1::RectF(cx, cy, cx + bw2, cy + bh2));
+            }
         }
     }
 

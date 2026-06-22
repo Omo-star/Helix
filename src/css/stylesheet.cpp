@@ -626,6 +626,18 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "flex-direction") {
         out.flexDirectionSet = true;
         out.flexDirection = sLower(sTrim(val)) == "column" ? 1 : 0;
+    } else if (prop == "align-items") {
+        std::string v = sLower(sTrim(val));
+        out.alignItemsSet = true;
+        out.alignItems = (v == "flex-start" || v == "start") ? 1
+                       : (v == "center") ? 2
+                       : (v == "flex-end" || v == "end") ? 3 : 0;  // 0 = stretch
+    } else if (prop == "justify-content") {
+        std::string v = sLower(sTrim(val));
+        out.justifyContentSet = true;
+        out.justifyContent = (v == "center") ? 1
+                           : (v == "flex-end" || v == "end") ? 2
+                           : (v == "space-between") ? 3 : 0;
     } else if (prop == "flex-grow") {
         try {
             out.flexGrow = std::max(0.f, std::stof(sTrim(val)));
@@ -824,14 +836,30 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "line-height") {
         float lh = ParseLineHeightValue(val, out.fontSize > 0 ? out.fontSize : 16.f);
         if (lh > 0) out.lineHeight = lh;
+    } else if (prop == "object-fit") {
+        std::string v = sLower(sTrim(val));
+        out.objectFit = (v == "contain") ? 1 : (v == "cover") ? 2
+                      : (v == "none") ? 3 : (v == "scale-down") ? 4 : 0;
     } else if (prop == "width") {
-        float pct = ParsePercentage(val);
-        if (pct >= 0) out.widthPercent = pct;
-        else { float f = ParseLength(val); if (f >= 0) out.width = f; }
+        std::string v = sLower(sTrim(val));
+        if (v == "min-content") out.widthKeyword = 1;
+        else if (v == "max-content") out.widthKeyword = 2;
+        else if (v == "fit-content") out.widthKeyword = 3;
+        else {
+            float pct = ParsePercentage(val);
+            if (pct >= 0) out.widthPercent = pct;
+            else { float f = ParseLength(val); if (f >= 0) out.width = f; }
+        }
     } else if (prop == "height") {
-        float pct = ParsePercentage(val);
-        if (pct >= 0) out.heightPercent = pct;
-        else { float f = ParseLength(val); if (f >= 0) out.height = f; }
+        std::string v = sLower(sTrim(val));
+        if (v == "min-content") out.heightKeyword = 1;
+        else if (v == "max-content") out.heightKeyword = 2;
+        else if (v == "fit-content") out.heightKeyword = 3;
+        else {
+            float pct = ParsePercentage(val);
+            if (pct >= 0) out.heightPercent = pct;
+            else { float f = ParseLength(val); if (f >= 0) out.height = f; }
+        }
     } else if (prop == "max-width") {
         float pct = ParsePercentage(val);
         if (pct >= 0) out.maxWidthPercent = pct;

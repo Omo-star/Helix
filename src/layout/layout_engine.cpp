@@ -103,19 +103,46 @@ bool TagIsReplacedImage(const Node* n, const std::string& baseUrl, std::string& 
     if (!n) return false;
     const std::string& tag = n->tagName;
     if (tag == "img") {
+        auto firstSrcsetUrl = [](const std::string& srcset) {
+            const size_t begin = srcset.find_first_not_of(" \t\n");
+            if (begin == std::string::npos) return std::string{};
+            if (srcset.rfind("data:", begin) == begin) {
+                const size_t end = srcset.find_first_of(" \t\n", begin);
+                return srcset.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+            }
+            const size_t end = srcset.find_first_of(" \t\n,", begin);
+            return srcset.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+        };
         std::string src = n->attr("src");
-        // Responsive / lazy images often carry the real URL only in srcset or
-        // data-src; fall back to those so they aren't left blank.
-        if (src.empty()) src = n->attr("data-src");
-        if (src.empty()) {
+        const bool inlinePlaceholder = src.rfind("data:", 0) == 0;
+        // Lazy loaders commonly leave a 1px data: placeholder in src. The
+        // real resource must win or the browser will render only that pixel.
+        if (src.empty() || inlinePlaceholder) {
+            for (const char* name : { "data-src", "data-lazy-src", "data-original" }) {
+                const std::string candidate = n->attr(name);
+                if (!candidate.empty()) { src = candidate; break; }
+            }
+        }
+        if (src.empty() || src.rfind("data:", 0) == 0) {
             // srcset = "url1 1x, url2 2x" or "url1 480w, url2 800w" — take the
             // first candidate's URL (the part before the first space).
             std::string ss = n->attr("srcset");
             if (ss.empty()) ss = n->attr("data-srcset");
-            size_t a = ss.find_first_not_of(" \t\n");
-            if (a != std::string::npos) {
-                size_t b = ss.find_first_of(" \t\n,", a);
-                src = ss.substr(a, b == std::string::npos ? std::string::npos : b - a);
+            src = firstSrcsetUrl(ss);
+        }
+        if (src.empty() && n->parent && n->parent->tagName == "picture") {
+            for (const auto& child : n->parent->children) {
+                if (child->type != NodeType::Element || child->tagName != "source") continue;
+                std::string type = child->attr("type");
+                for (char& c : type) c = (char)std::tolower((unsigned char)c);
+                // The built-in WIC path cannot decode these without an optional
+                // system codec, so prefer a later WebP/raster source instead.
+                if (type == "image/avif" || type == "image/svg+xml") continue;
+                std::string candidate = child->attr("srcset");
+                if (candidate.empty()) candidate = child->attr("data-srcset");
+                if (candidate.empty()) candidate = child->attr("src");
+                src = firstSrcsetUrl(candidate);
+                if (!src.empty()) break;
             }
         }
         if (src.empty()) return false;
@@ -643,6 +670,14 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
     // Resolve width.
     float w = usedWidth(s, cbW);
     float bp = box.borderLeft + box.padLeft + box.borderRight + box.padRight;
+    // Intrinsic-sizing keywords (min-content/max-content/fit-content).
+    if (s.widthKeyword != 0) {
+        float mc = maxContent(box);
+        if (s.widthKeyword == 3)  // fit-content: clamp max-content to available
+            w = std::min(mc, std::max(0.f, cbW - box.marginLeft - box.marginRight - bp));
+        else                      // min/max-content approximated to max-content
+            w = mc;
+    }
     bool isBlockLevel = (box.kind == BoxKind::Block || box.kind == BoxKind::ListItem
                       || box.kind == BoxKind::Table || box.kind == BoxKind::TableRow
                       || box.kind == BoxKind::TableCell);
@@ -849,6 +884,18 @@ void Engine::layoutBlockChildren(LayoutBox& box, std::vector<LayoutBox*>& positi
     box.contentH = std::max(0.f, contentBottom - box.contentY());
 }
 
+// Shift a laid-out box and all its descendants/line boxes by (dx, dy). Needed
+// because layout assigns document-absolute coordinates, so moving a flex item
+// after the fact (align-items center/end) must move its whole subtree.
+static void TranslateSubtree(LayoutBox& box, float dx, float dy) {
+    box.x += dx; box.y += dy;
+    for (auto& line : box.lines) {
+        line.x += dx; line.y += dy;
+        for (auto& frag : line.frags) { frag.x += dx; frag.y += dy; }
+    }
+    for (auto& kid : box.kids) TranslateSubtree(*kid, dx, dy);
+}
+
 void Engine::layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) {
     std::vector<LayoutBox*> items;
     for (auto& child : box.kids) {
@@ -858,12 +905,15 @@ void Engine::layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
     if (items.empty()) { box.contentH = 0; return; }
 
     const float gap = px(std::max(0.f, box.style.flexGap));
+    // A definite container height lets items resolve height:% (CSS would
+    // otherwise treat it as auto). -1 when the container's height is auto.
+    const float cbHeight = usedHeight(box.style, -1.f);
     if (box.style.flexDirection == 1) {
         float cursorY = box.contentY();
         for (LayoutBox* item : items) {
             item->y = cursorY;
             std::vector<LayoutBox*> positioned;
-            layoutBox(*item, box.contentX(), box.contentW, -1.f, positioned, nullptr);
+            layoutBox(*item, box.contentX(), box.contentW, cbHeight, positioned, nullptr);
             for (auto* p : positioned) positionedOut.push_back(p);
             cursorY += item->marginBoxH() + gap;
         }
@@ -899,14 +949,35 @@ void Engine::layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
         child.style.widthPercent = -1;
         child.y = box.contentY();
         std::vector<LayoutBox*> positioned;
-        layoutBox(child, cursorX - marginLeft, box.contentW, -1.f, positioned, nullptr);
+        layoutBox(child, cursorX - marginLeft, box.contentW, cbHeight, positioned, nullptr);
         for (auto* p : positioned) positionedOut.push_back(p);
         child.style.width = oldWidth;
         child.style.widthPercent = oldPercent;
         cursorX += child.marginBoxW() + gap;
         maxH = std::max(maxH, child.marginBoxH());
     }
-    box.contentH = maxH;
+
+    // Cross-axis line height = explicit container height if set, else tallest item.
+    float crossH = usedHeight(box.style, -1.f);
+    if (crossH < 0) crossH = maxH;
+    box.contentH = crossH;
+
+    // align-items on the cross axis (default stretch).
+    const int align = box.style.alignItems;  // 0=stretch,1=start,2=center,3=end
+    for (const auto& item : sized) {
+        LayoutBox& child = *item.box;
+        const float boxH = child.marginBoxH();
+        if (align == 0) {
+            // Stretch auto-height, non-replaced items to fill the line.
+            if (child.style.height < 0 && child.style.heightPercent < 0
+                && child.kind != BoxKind::Replaced && boxH < crossH)
+                child.contentH += (crossH - boxH);
+        } else if (align == 2) {        // center
+            TranslateSubtree(child, 0.f, (crossH - boxH) / 2.f);
+        } else if (align == 3) {        // end
+            TranslateSubtree(child, 0.f, crossH - boxH);
+        }
+    }
 }
 
 // ─── table layout (auto algorithm) ───────────────────────────────────────────
@@ -983,7 +1054,7 @@ void Engine::layoutGrid(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
             item.style.widthPercent = -1;
             item.y = rowY;
             std::vector<LayoutBox*> pos;
-            layoutBox(item, colX[c], colW[c], -1.f, pos, nullptr);
+            layoutBox(item, colX[c], colW[c], usedHeight(box.style, -1.f), pos, nullptr);
             for (auto* p : pos) positionedOut.push_back(p);
             item.style.width = savedW;
             item.style.widthPercent = savedPct;

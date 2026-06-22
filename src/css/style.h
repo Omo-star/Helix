@@ -111,6 +111,11 @@ struct ComputedStyle {
     bool     visibilityHidden = false;
     float    opacity          = 1.f;
     bool     opacitySet       = false;
+    // object-fit for replaced elements: 0=fill,1=contain,2=cover,3=none,4=scale-down
+    int      objectFit        = 0;
+    // Intrinsic-sizing keyword for width/height: 0=none,1=min-content,2=max-content,3=fit-content
+    int      widthKeyword     = 0;
+    int      heightKeyword    = 0;
     bool     visibilitySet    = false;
     // List style
     bool     listStyleNone    = false;
@@ -123,6 +128,11 @@ struct ComputedStyle {
     float    flexGrow        = 0;
     bool     flexGrowSet     = false;
     float    flexGap         = -1;
+    // align-items on the cross axis: 0=stretch(default),1=start,2=center,3=end
+    int      alignItems      = 0;
+    bool     alignItemsSet   = false;
+    int      justifyContent  = 0; // 0=start,1=center,2=end,3=space-between
+    bool     justifyContentSet = false;
     // Grid tracks remain CSS tokens until their containing block is known.
     std::vector<std::string> gridTemplateColumns;
     bool     gridTemplateColumnsSet = false;
@@ -227,12 +237,17 @@ struct ComputedStyle {
         if (child.leftSet)   { out.left   = child.left;   out.leftSet   = true; }
         if (child.visibilitySet) { out.visibilityHidden = child.visibilityHidden; out.visibilitySet = true; }
         if (child.opacitySet) { out.opacity = child.opacity; out.opacitySet = true; }
+        if (child.objectFit != 0) out.objectFit = child.objectFit;
+        if (child.widthKeyword != 0) out.widthKeyword = child.widthKeyword;
+        if (child.heightKeyword != 0) out.heightKeyword = child.heightKeyword;
         if (child.listStyleSet) { out.listStyleNone = child.listStyleNone; out.listStyleSet = true; }
         if (child.borderSpacing >= 0) out.borderSpacing = child.borderSpacing;
         if (child.flexDirectionSet) {
             out.flexDirection = child.flexDirection;
             out.flexDirectionSet = true;
         }
+        if (child.alignItemsSet) { out.alignItems = child.alignItems; out.alignItemsSet = true; }
+        if (child.justifyContentSet) { out.justifyContent = child.justifyContent; out.justifyContentSet = true; }
         if (child.flexGrowSet) {
             out.flexGrow = child.flexGrow;
             out.flexGrowSet = true;
