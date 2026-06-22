@@ -36,7 +36,21 @@ static const std::map<std::string, unsigned long>& namedEntities() {
         {"raquo", 0x00BB}, {"laquo", 0x00AB},
         {"rsquo", 0x2019}, {"lsquo", 0x2018}, {"rdquo", 0x201D}, {"ldquo", 0x201C},
         {"copy", 0x00A9}, {"reg", 0x00AE}, {"trade", 0x2122},
-        {"times", 0x00D7}, {"divide", 0x00F7}, {"middot", 0x00B7}
+        {"times", 0x00D7}, {"divide", 0x00F7}, {"middot", 0x00B7},
+        // Arrows
+        {"rarr", 0x2192}, {"larr", 0x2190}, {"uarr", 0x2191}, {"darr", 0x2193},
+        {"harr", 0x2194}, {"rArr", 0x21D2}, {"lArr", 0x21D0},
+        // Spaces & dashes
+        {"ensp", 0x2002}, {"emsp", 0x2003}, {"thinsp", 0x2009}, {"shy", 0x00AD},
+        // Common symbols & punctuation
+        {"deg", 0x00B0}, {"plusmn", 0x00B1}, {"sup2", 0x00B2}, {"sup3", 0x00B3},
+        {"frac12", 0x00BD}, {"frac14", 0x00BC}, {"frac34", 0x00BE},
+        {"cent", 0x00A2}, {"pound", 0x00A3}, {"euro", 0x20AC}, {"yen", 0x00A5},
+        {"sect", 0x00A7}, {"para", 0x00B6}, {"dagger", 0x2020}, {"Dagger", 0x2021},
+        {"permil", 0x2030}, {"prime", 0x2032}, {"Prime", 0x2033},
+        {"infin", 0x221E}, {"ne", 0x2260}, {"le", 0x2264}, {"ge", 0x2265},
+        {"micro", 0x00B5}, {"sbquo", 0x201A}, {"bdquo", 0x201E},
+        {"check", 0x2713}, {"cross", 0x2717}, {"star", 0x2605}, {"starf", 0x2605}
     };
     return entities;
 }
