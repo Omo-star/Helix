@@ -120,33 +120,27 @@ inline void TabPushHistory(Tab& tab, const std::string& url) {
 
 inline const std::string& HomePageHtml() {
     static const std::string html = R"html(<!DOCTYPE html>
-<html><head><title>Helix</title>
-<style>
-body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 40px; background: #fafafa; }
-h1 { font-size: 28px; color: #333; margin-bottom: 4px; }
-p { color: #666; line-height: 1.6; }
-a { color: #0366d6; }
-.shortcuts { margin-top: 32px; }
-.shortcuts a { display: inline-block; background: #fff; border: 1px solid #ddd;
-  border-radius: 8px; padding: 12px 20px; margin: 6px; text-decoration: none; color: #333; }
-.shortcuts a:hover { border-color: #aaa; }
-kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 2px 6px; font-size: 13px; }
-</style></head><body>
+<html>
+<head><title>Helix</title></head>
+<body>
 <h1>Helix</h1>
-<p>A web browser, from scratch.</p>
-<div class="shortcuts">
-<a href="https://en.wikipedia.org/wiki/Main_Page">Wikipedia</a>
-<a href="https://news.ycombinator.com">Hacker News</a>
-<a href="https://lite.cnn.com">CNN Lite</a>
-<a href="helix://history">History</a>
-</div>
-<p style="margin-top:32px;font-size:13px;color:#999">
-<strong>Ctrl+L</strong> &mdash; focus address bar &bull;
-<strong>Ctrl+T</strong> &mdash; new tab &bull;
-<strong>Ctrl+W</strong> &mdash; close tab<br>
-<strong>Ctrl+F</strong> &mdash; find in page &bull;
-<strong>Escape</strong> &mdash; stop loading / close find bar</p>
-</body></html>)html";
+<p>Your browser. Built from scratch in C++. No Chromium. No WebView. Everything is yours.</p>
+<hr>
+<h3>Keyboard shortcuts</h3>
+<p><strong>Ctrl+L</strong> &mdash; focus address bar</p>
+<p><strong>Ctrl+T</strong> &mdash; new tab</p>
+<p><strong>Ctrl+W</strong> &mdash; close tab</p>
+<p><strong>Ctrl+Tab</strong> &mdash; next tab</p>
+<p><strong>Ctrl+1&ndash;9</strong> &mdash; switch to tab</p>
+<p><strong>F5 / Ctrl+R</strong> &mdash; reload</p>
+<p><strong>Alt+Left / Alt+Right</strong> &mdash; back / forward</p>
+<p><strong>Ctrl+H</strong> &mdash; history</p>
+<p><strong>Ctrl+= / Ctrl+-</strong> &mdash; zoom in / out</p>
+<p><strong>Ctrl+0</strong> &mdash; reset zoom</p>
+<p><strong>Ctrl+F</strong> &mdash; find in page</p>
+<p><strong>Escape</strong> &mdash; stop loading / close find bar</p>
+</body>
+</html>)html";
     return html;
 }
 
