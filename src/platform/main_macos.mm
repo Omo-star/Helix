@@ -8,7 +8,10 @@
 #import <Cocoa/Cocoa.h>
 #include "platform/platform.h"
 #include "platform/browser_core.h"
-#include "render/renderer.h"
+#include "platform/box_painter.h"
+#include "platform/plat_text_measure.h"
+#include "layout/layout_engine.h"
+#include "css/stylesheet.h"
 
 // ── forward declarations ─────────────────────────────────────────────────────
 
@@ -27,7 +30,28 @@ static int g_activeTab = 0;
 static JsEngine g_js;
 static Semaphore g_imageFetchGate(6);
 
+static std::unique_ptr<IPlatformRenderer> g_renderer;
+static std::unique_ptr<PlatTextMeasure> g_measure;
+static std::unique_ptr<LayoutBox> g_layoutRoot;
+static std::map<std::string, PlatBitmap> g_images;
+static std::map<std::string, PlatFont> g_fontCache;
+
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
+
+static Stylesheet CollectCSS(const Node* root) {
+    Stylesheet sheet;
+    std::function<void(const Node*)> walk = [&](const Node* n) {
+        if (!n) return;
+        if (n->type == NodeType::Element && n->tagName == "style") {
+            std::string css; for (auto& c : n->children) if (c->type == NodeType::Text) css += c->text;
+            auto part = ParseStylesheet(css);
+            for (auto& r : part.rules) sheet.rules.push_back(r);
+        }
+        for (auto& c : n->children) walk(c.get());
+    };
+    walk(root);
+    return sheet;
+}
 
 // ── HelixView (custom NSView for rendering) ──────────────────────────────────
 
@@ -40,29 +64,54 @@ static Tab& CurTab() { return g_tabs[g_activeTab]; }
 
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
-    // TODO: Drive the layout engine + paint pass here using the platform renderer.
-    // The macOS renderer gets its CGContext from [NSGraphicsContext currentContext].
-    // For now, fill with white background.
-    [[NSColor whiteColor] setFill];
-    NSRectFill(dirtyRect);
+    NSRect bounds = [self bounds];
+    int w = (int)bounds.size.width, h = (int)bounds.size.height;
 
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    if (!tab.page || !tab.page->dom) {
-        // Draw loading or error text
-        NSString* msg = tab.loading ? @"Loading..." : @"Navigate to a URL";
-        NSDictionary* attrs = @{ NSFontAttributeName: [NSFont systemFontOfSize:16],
-                                 NSForegroundColorAttributeName: [NSColor grayColor] };
-        [msg drawAtPoint:NSMakePoint(20, 20) withAttributes:attrs];
+    if (!g_renderer) {
+        g_renderer = CreatePlatformRenderer();
+        g_renderer->Init((__bridge void*)self);
+        g_measure = std::make_unique<PlatTextMeasure>(g_renderer.get());
+    }
+    g_renderer->Resize(w, h);
+    g_renderer->BeginFrame();
+    g_renderer->Clear({1, 1, 1, 1});
+
+    if (g_tabs.empty() || !CurTab().page || !CurTab().page->dom) {
+        PlatFont font = g_renderer->CreateFont(16, false, false, false, "");
+        g_renderer->DrawText(CurTab().loading ? L"Loading..." : L"Navigate to a URL",
+                             20, 20, 800, 30, font, {0.5f, 0.5f, 0.5f, 1});
+        g_renderer->ReleaseFont(font);
+        g_renderer->EndFrame();
         return;
     }
 
-    // The full rendering integration would call:
-    // 1. CollectStylesheet from the DOM
-    // 2. LayoutDocument with the macOS ITextMeasure
-    // 3. PaintBox through the macOS IPlatformRenderer
-    // This requires porting the Renderer class to use IPlatformRenderer,
-    // which is the next step after the window shells are in place.
+    Tab& tab = CurTab();
+    try {
+        Stylesheet sheet = CollectCSS(tab.page->dom.get());
+        LayoutInput in;
+        in.document = tab.page->dom.get();
+        in.sheet = &sheet;
+        in.measure = g_measure.get();
+        in.viewportW = (float)w;
+        in.viewportH = (float)h;
+        in.zoom = 1.f;
+        in.baseUrl = tab.page->url;
+        g_layoutRoot = LayoutDocument(in);
+        if (g_layoutRoot) {
+            std::vector<HitRegion> hits;
+            PaintState ps;
+            ps.r = g_renderer.get();
+            ps.scrollY = tab.scrollY;
+            ps.topInset = 0;
+            ps.baseUrl = tab.page->url;
+            ps.images = &g_images;
+            ps.hits = &hits;
+            ps.fontCache = &g_fontCache;
+            PaintBoxTree(ps, *g_layoutRoot);
+            tab.docHeight = g_layoutRoot->contentH + 32.f;
+        }
+    } catch (...) { /* keep the browser alive */ }
+    g_renderer->EndFrame();
 }
 
 - (void)mouseDown:(NSEvent*)event {

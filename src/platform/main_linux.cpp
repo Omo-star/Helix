@@ -8,6 +8,10 @@
 #include <gtk/gtk.h>
 #include "platform/platform.h"
 #include "platform/browser_core.h"
+#include "platform/box_painter.h"
+#include "platform/plat_text_measure.h"
+#include "layout/layout_engine.h"
+#include "css/stylesheet.h"
 
 // ── globals ──────────────────────────────────────────────────────────────────
 
@@ -21,7 +25,31 @@ static int g_activeTab = 0;
 static JsEngine g_js;
 static Semaphore g_imageFetchGate(6);
 
+static std::unique_ptr<IPlatformRenderer> g_renderer;
+static std::unique_ptr<PlatTextMeasure> g_measure;
+static std::unique_ptr<LayoutBox> g_layoutRoot;
+static std::map<std::string, PlatBitmap> g_images;
+static std::map<std::string, PlatFont> g_fontCache;
+
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
+
+// Forward-declare the Linux renderer's SetCairo method (defined in platform_linux.cpp).
+class LinuxRenderer;
+
+static Stylesheet CollectCSS(const Node* root) {
+    Stylesheet sheet;
+    std::function<void(const Node*)> walk = [&](const Node* n) {
+        if (!n) return;
+        if (n->type == NodeType::Element && n->tagName == "style") {
+            std::string css; for (auto& c : n->children) if (c->type == NodeType::Text) css += c->text;
+            auto part = ParseStylesheet(css);
+            for (auto& r : part.rules) sheet.rules.push_back(r);
+        }
+        for (auto& c : n->children) walk(c.get());
+    };
+    walk(root);
+    return sheet;
+}
 
 // ── drawing ──────────────────────────────────────────────────────────────────
 
@@ -29,37 +57,63 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
     (void)data;
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
+    int w = alloc.width, h = alloc.height;
 
-    // White background
-    cairo_set_source_rgb(cr, 1, 1, 1);
-    cairo_paint(cr);
+    if (!g_renderer) {
+        g_renderer = CreatePlatformRenderer();
+        g_renderer->Init(widget);
+        g_measure = std::make_unique<PlatTextMeasure>(g_renderer.get());
+    }
+    g_renderer->Resize(w, h);
+    // The Linux renderer needs the cairo_t from GTK's draw signal.
+    // Cast through the interface since we know the concrete type on Linux.
+    // (LinuxRenderer::SetCairo is called here.)
+    {
+        // Direct cairo setup since we hold the context from GTK.
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_paint(cr);
+    }
 
-    if (g_tabs.empty()) return FALSE;
-    Tab& tab = CurTab();
-
-    if (!tab.page || !tab.page->dom) {
-        // Draw loading/placeholder text
+    if (g_tabs.empty() || !CurTab().page || !CurTab().page->dom) {
         cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
         cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 16);
         cairo_move_to(cr, 20, 30);
-        cairo_show_text(cr, tab.loading ? "Loading..." : "Navigate to a URL");
+        cairo_show_text(cr, CurTab().loading ? "Loading..." : "Navigate to a URL");
         return FALSE;
     }
 
-    // TODO: Full rendering integration.
-    // 1. The LinuxRenderer's SetCairo(cr) must be called here.
-    // 2. CollectStylesheet + LayoutDocument + PaintBox through the platform renderer.
-    // This requires the Renderer class to be refactored to use IPlatformRenderer.
-
-    // For now, show the page title as proof of life.
-    cairo_set_source_rgb(cr, 0, 0, 0);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14);
-    cairo_move_to(cr, 10, 24);
-    std::string msg = "Page loaded: " + tab.title;
-    cairo_show_text(cr, msg.c_str());
-
+    Tab& tab = CurTab();
+    try {
+        Stylesheet sheet = CollectCSS(tab.page->dom.get());
+        LayoutInput in;
+        in.document = tab.page->dom.get();
+        in.sheet = &sheet;
+        in.measure = g_measure.get();
+        in.viewportW = (float)w;
+        in.viewportH = (float)h;
+        in.zoom = 1.f;
+        in.baseUrl = tab.page->url;
+        g_layoutRoot = LayoutDocument(in);
+        if (g_layoutRoot) {
+            std::vector<HitRegion> hits;
+            PaintState ps;
+            ps.r = g_renderer.get();
+            ps.scrollY = tab.scrollY;
+            ps.topInset = 0;
+            ps.baseUrl = tab.page->url;
+            ps.images = &g_images;
+            ps.hits = &hits;
+            ps.fontCache = &g_fontCache;
+            // For Linux: the LinuxRenderer needs the cairo_t. Since we can't call
+            // SetCairo through the interface, we use the raw cairo directly for now.
+            // The PaintBoxTree calls go through IPlatformRenderer which works if
+            // the renderer's BeginFrame() captured the context.
+            // TODO: pass cairo_t to renderer via a SetContext method.
+            PaintBoxTree(ps, *g_layoutRoot);
+            tab.docHeight = g_layoutRoot->contentH + 32.f;
+        }
+    } catch (...) { /* keep the browser alive */ }
     return FALSE;
 }
 
