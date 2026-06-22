@@ -128,9 +128,10 @@ body {
     background: #0a0a0a;
     color: #e0e0e0;
     margin: 0;
-    padding: 60px 20%;
+    padding: 60px 0;
     line-height: 1.6;
 }
+.w { width: 500px; margin-left: auto; margin-right: auto; }
 h1 { font-size: 40px; color: #fff; text-align: center; margin-bottom: 4px; }
 .accent { color: #6c63ff; }
 .sub { text-align: center; color: #888; font-size: 15px; }
@@ -152,6 +153,7 @@ h3 { font-size: 13px; color: #6c63ff; margin-bottom: 12px; }
 </style>
 </head>
 <body>
+<div class="w">
 <h1><span class="accent">&lt;</span>Helix<span class="accent">/&gt;</span></h1>
 <p class="sub">A web browser, built from scratch in C++</p>
 <p class="sub2">No Chromium. No WebView. No shortcuts.</p>
@@ -173,6 +175,7 @@ h3 { font-size: 13px; color: #6c63ff; margin-bottom: 12px; }
 <div class="ft">
 <p>Helix v1.0 <span class="tag">cross-platform</span></p>
 <p style="margin-top:6px;">HTML &bull; CSS &bull; JS &bull; Layout &bull; Rendering &mdash; all from scratch</p>
+</div>
 </div>
 </body>
 </html>)html";
