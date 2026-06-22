@@ -1,10 +1,10 @@
 #include "network/fetcher.h"
-#include <windows.h>
-#include <wininet.h>
+#include <curl/curl.h>
 #include <cctype>
 #include <cstring>
 #include <mutex>
-#pragma comment(lib, "wininet.lib")
+
+// ── helpers (data-URL decoding — platform-independent, kept as-is) ───────────
 
 static int HexValue(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -68,24 +68,59 @@ static bool StartsWithNoCase(const std::string& value, const char* prefix) {
     return true;
 }
 
-static HINTERNET SharedInternetSession() {
-    static std::once_flag init;
-    static HINTERNET session = nullptr;
-    std::call_once(init, []() {
-        session = InternetOpenA(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Helix/0.1 (+https://github.com/helix-browser)",
-            INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
-        if (session) {
-            DWORD decode = TRUE;
-            InternetSetOptionA(session, INTERNET_OPTION_HTTP_DECODING, &decode, sizeof(decode));
-        }
-    });
-    return session;
+// ── libcurl global init (once, thread-safe) ──────────────────────────────────
+
+static void EnsureCurlInit() {
+    static std::once_flag flag;
+    std::call_once(flag, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
+
+// ── write callback for libcurl ───────────────────────────────────────────────
+
+struct WriteCtx {
+    std::string* body;
+    size_t limit;
+    bool exceeded;
+};
+
+static size_t WriteCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* ctx = static_cast<WriteCtx*>(userdata);
+    size_t bytes = size * nmemb;
+    if (ctx->body->size() + bytes > ctx->limit) {
+        ctx->exceeded = true;
+        return 0;  // abort transfer
+    }
+    ctx->body->append(ptr, bytes);
+    return bytes;
+}
+
+// ── header callback (captures Content-Type) ──────────────────────────────────
+
+static size_t HeaderCallback(char* buffer, size_t size, size_t nitems, void* userdata) {
+    auto* ct = static_cast<std::string*>(userdata);
+    size_t total = size * nitems;
+    std::string line(buffer, total);
+    if (StartsWithNoCase(line, "content-type:")) {
+        size_t colon = line.find(':');
+        std::string val = line.substr(colon + 1);
+        // Trim whitespace and trailing \r\n
+        while (!val.empty() && (val.front() == ' ' || val.front() == '\t')) val.erase(val.begin());
+        while (!val.empty() && (val.back() == '\r' || val.back() == '\n')) val.pop_back();
+        // Strip parameters (;charset=...)
+        size_t semi = val.find(';');
+        if (semi != std::string::npos) val = val.substr(0, semi);
+        while (!val.empty() && val.back() == ' ') val.pop_back();
+        *ct = val;
+    }
+    return total;
+}
+
+// ── public API ───────────────────────────────────────────────────────────────
 
 FetchResult FetchUrl(const std::string& url, size_t maxResponseBytes) {
     FetchResult r;
 
+    // data: URLs are decoded locally (no network).
     if (StartsWithNoCase(url, "data:")) {
         size_t comma = url.find(',');
         if (comma == std::string::npos) {
@@ -118,66 +153,48 @@ FetchResult FetchUrl(const std::string& url, size_t maxResponseBytes) {
         return r;
     }
 
-    // Keep one WinINet session alive. Besides avoiding setup churn, this keeps
-    // session cookies available to subsequent page, stylesheet, and image requests.
-    HINTERNET hNet = SharedInternetSession();
-    if (!hNet) { r.error = "InternetOpen failed"; return r; }
+    // HTTP(S) via libcurl.
+    EnsureCurlInit();
+    CURL* curl = curl_easy_init();
+    if (!curl) { r.error = "curl_easy_init failed"; return r; }
 
-    DWORD flags =
-        INTERNET_FLAG_RELOAD |
-        INTERNET_FLAG_NO_CACHE_WRITE |
-        INTERNET_FLAG_IGNORE_CERT_DATE_INVALID |
-        INTERNET_FLAG_IGNORE_CERT_CN_INVALID;  // tolerate self-signed in v0.1
+    WriteCtx wctx{ &r.body, maxResponseBytes, false };
 
-    static constexpr char kHeaders[] =
-        "Accept-Encoding: gzip, deflate\r\n"
-        "Accept-Language: en-US,en;q=0.9\r\n";
-    HINTERNET hReq = InternetOpenUrlA(hNet, url.c_str(), kHeaders, -1L, flags, 0);
-    if (!hReq) {
-        r.error = "InternetOpenUrl failed for: " + url;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Helix/0.1 (+https://github.com/helix-browser)");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");   // auto decompress gzip/deflate
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &wctx);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &r.contentType);
+    // Accept self-signed certs in v0.1 (matches the old WinINet behavior).
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        r.error = curl_easy_strerror(res);
+        if (wctx.exceeded) r.error = "Response exceeds size limit";
+        curl_easy_cleanup(curl);
         return r;
     }
 
-    // INTERNET_OPTION_URL reports the resolved request URL after any redirects.
-    DWORD finalUrlLength = 0;
-    InternetQueryOptionA(hReq, INTERNET_OPTION_URL, nullptr, &finalUrlLength);
-    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && finalUrlLength > 1) {
-        std::string finalUrl(finalUrlLength, '\0');
-        if (InternetQueryOptionA(hReq, INTERNET_OPTION_URL, finalUrl.data(), &finalUrlLength)) {
-            finalUrl.resize(std::strlen(finalUrl.c_str()));
-            r.finalUrl = std::move(finalUrl);
-        }
-    }
-    if (r.finalUrl.empty()) r.finalUrl = url;
-
-    // HTTP status code: don't treat 4xx/5xx error pages as a successful body
-    // (otherwise a 429 rate-limit page gets handed to the image decoder).
-    DWORD status = 0;
-    DWORD statusLen = sizeof(status);
-    HttpQueryInfoA(hReq, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
-                   &status, &statusLen, nullptr);
-
-    // Content-Type header
-    char ct[256] = {};
-    DWORD len = (DWORD)sizeof(ct);
-    HttpQueryInfoA(hReq, HTTP_QUERY_CONTENT_TYPE, ct, &len, nullptr);
-    r.contentType = ct;
-
-    // Read body
-    char buf[8192];
-    DWORD bytesRead = 0;
-    while (InternetReadFile(hReq, buf, sizeof(buf), &bytesRead) && bytesRead) {
-        if (r.body.size() + bytesRead > maxResponseBytes) {
-            r.body.clear();
-            r.error = "Response exceeds 12 MiB limit";
-            InternetCloseHandle(hReq);
-            return r;
-        }
-        r.body.append(buf, bytesRead);
-    }
-
-    InternetCloseHandle(hReq);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     r.status = (int)status;
+
+    char* effectiveUrl = nullptr;
+    curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
+    r.finalUrl = effectiveUrl ? effectiveUrl : url;
+
+    curl_easy_cleanup(curl);
+
     if (status >= 400) {
         r.success = false;
         r.error = "HTTP " + std::to_string(status);

@@ -1,8 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
-project(Helix VERSION 0.1.0 LANGUAGES CXX)
+project(Helix VERSION 0.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── libcurl (cross-platform HTTP) ─────────────────────────────────────────────
+include(FetchContent)
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)   # Windows TLS backend
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(HTTP_ONLY ON CACHE BOOL "" FORCE)
+FetchContent_Declare(curl
+    URL https://github.com/curl/curl/releases/download/curl-8_11_1/curl-8.11.1.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(curl)
 
 # Use /EHa everywhere so catch(...) also catches structured exceptions
 # (access violations etc.) — a faulting page must never kill the browser.
@@ -36,11 +49,13 @@ add_library(helix_engine STATIC
     src/js/runtime.cpp
     src/js/dom_bridge.cpp
     src/js/engine.cpp
+    src/third_party/stb_image_impl.cpp
 )
 
 target_include_directories(helix_engine PUBLIC src)
+target_link_libraries(helix_engine PUBLIC CURL::libcurl)
 target_compile_definitions(helix_engine PUBLIC
-    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX CURL_STATICLIB
 )
 if (MSVC)
     # /EHa: catch SEH exceptions (stack overflow, access violation) in catch(...)
@@ -56,7 +71,7 @@ add_executable(Helix WIN32
 target_include_directories(Helix PRIVATE src)
 
 target_link_libraries(Helix PRIVATE
-    helix_engine d2d1 dwrite windowscodecs wininet comctl32 ole32
+    helix_engine d2d1 dwrite comctl32 ole32
 )
 
 # Reserve a large stack (64 MB). Real pages can drive the JS engine and DOM
@@ -80,7 +95,7 @@ add_executable(helix-tests
 target_include_directories(helix-tests PRIVATE src)
 
 target_link_libraries(helix-tests PRIVATE
-    helix_engine wininet
+    helix_engine
 )
 
 add_executable(helix-layout-engine-tests
@@ -89,15 +104,15 @@ add_executable(helix-layout-engine-tests
     src/test/layout_engine_tests.cpp
 )
 target_include_directories(helix-layout-engine-tests PRIVATE src)
-target_link_libraries(helix-layout-engine-tests PRIVATE helix_engine wininet)
+target_link_libraries(helix-layout-engine-tests PRIVATE helix_engine)
 
 add_executable(dump_layout tools/dump_layout.cpp)
 target_include_directories(dump_layout PRIVATE src)
-target_link_libraries(dump_layout PRIVATE helix_engine wininet)
+target_link_libraries(dump_layout PRIVATE helix_engine)
 
 add_executable(dump_js tools/dump_js.cpp)
 target_include_directories(dump_js PRIVATE src)
-target_link_libraries(dump_js PRIVATE helix_engine wininet)
+target_link_libraries(dump_js PRIVATE helix_engine)
 if (MSVC)
     target_link_options(dump_js PRIVATE /DYNAMICBASE:NO /MAP)
 endif()

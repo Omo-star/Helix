@@ -1,12 +1,11 @@
 #include "render/renderer.h"
 #include "layout/layout_engine.h"
 #include "network/url.h"
+#include "third_party/stb_image.h"
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
-#pragma comment(lib, "windowscodecs.lib")
 #include <d2d1.h>
 #include <dwrite.h>
-#include <wincodec.h>
 #include <sstream>
 #include <algorithm>
 #include <functional>
@@ -175,8 +174,7 @@ bool Renderer::Init(HWND hwnd) {
             __uuidof(IDWriteFactory),
             reinterpret_cast<IUnknown**>(&m_dwrite))))
         return false;
-    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&m_wic));
+    // WIC removed — stb_image handles image decoding (cross-platform).
     RecreateFormats();
     CreateTabFont();
     return EnsureTarget();
@@ -241,7 +239,7 @@ Renderer::~Renderer() {
     r(m_fmtCode); r(m_fmtH1);   r(m_fmtH2); r(m_fmtH3); r(m_fmtTab);
     for (auto& [k, f] : m_fmtCache) if (f) f->Release();
     m_fmtCache.clear();
-    r(m_dwrite); r(m_wic); r(m_factory);
+    r(m_dwrite); r(m_factory);
 }
 
 void Renderer::Resize(UINT w, UINT h) {
@@ -265,45 +263,41 @@ void Renderer::ReceiveImage(const std::string& url, const std::vector<uint8_t>& 
     // in-flight slot. Otherwise one bad URL is stuck "loading" forever.
     m_loadingImages.erase(url);
     auto fail = [&]() { m_failedImages.insert(url); };
-    if (!m_wic || !m_rt || bytes.empty()) { fail(); return; }
-    IWICStream* stream = nullptr;
-    if (FAILED(m_wic->CreateStream(&stream))) { fail(); return; }
-    if (FAILED(stream->InitializeFromMemory(
-            const_cast<BYTE*>(bytes.data()), (DWORD)bytes.size()))) {
-        stream->Release(); fail(); return;
+    if (!m_rt || bytes.empty()) { fail(); return; }
+
+    // Decode with stb_image (cross-platform, no WIC dependency).
+    int w = 0, h = 0, channels = 0;
+    unsigned char* pixels = stbi_load_from_memory(
+        bytes.data(), (int)bytes.size(), &w, &h, &channels, 4);  // force RGBA
+    if (!pixels || w <= 0 || h <= 0) { if (pixels) stbi_image_free(pixels); fail(); return; }
+
+    // stb_image outputs RGBA; Direct2D wants PBGRA (pre-multiplied, swizzled).
+    for (int i = 0; i < w * h; ++i) {
+        unsigned char* p = pixels + i * 4;
+        unsigned char r = p[0], g = p[1], b = p[2], a = p[3];
+        float af = a / 255.f;
+        p[0] = (unsigned char)(b * af + 0.5f);  // B
+        p[1] = (unsigned char)(g * af + 0.5f);  // G
+        p[2] = (unsigned char)(r * af + 0.5f);  // R
+        p[3] = a;                                 // A
     }
-    IWICBitmapDecoder* dec = nullptr;
-    if (FAILED(m_wic->CreateDecoderFromStream(
-            stream, nullptr, WICDecodeMetadataCacheOnLoad, &dec))) {
-        stream->Release(); fail(); return;
+
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    ID2D1Bitmap* bmp = nullptr;
+    HRESULT hr = m_rt->CreateBitmap(
+        D2D1::SizeU((UINT32)w, (UINT32)h), pixels, (UINT32)(w * 4), props, &bmp);
+    stbi_image_free(pixels);
+
+    if (SUCCEEDED(hr) && bmp) {
+        auto it = m_images.find(url);
+        if (it != m_images.end() && it->second) it->second->Release();
+        m_images[url] = bmp;
+        InvalidateLayout();
+        m_failedImages.erase(url);
+    } else {
+        fail();
     }
-    IWICBitmapFrameDecode* frame = nullptr;
-    if (FAILED(dec->GetFrame(0, &frame))) {
-        dec->Release(); stream->Release(); fail(); return;
-    }
-    bool decoded = false;
-    IWICFormatConverter* conv = nullptr;
-    if (SUCCEEDED(m_wic->CreateFormatConverter(&conv))) {
-        if (SUCCEEDED(conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {
-            ID2D1Bitmap* bmp = nullptr;
-            if (SUCCEEDED(m_rt->CreateBitmapFromWicBitmap(conv, nullptr, &bmp))) {
-                auto it = m_images.find(url);
-                if (it != m_images.end() && it->second) it->second->Release();
-                m_images[url] = bmp;
-                // The layout tree was built before this image's intrinsic size
-                // was known (replaced boxes got 0×0 and painted invisibly).
-                // Drop the cached tree so the next paint re-lays-out with the
-                // real dimensions, otherwise loaded images never appear.
-                InvalidateLayout();
-                decoded = true;
-            }
-        }
-        conv->Release();
-    }
-    frame->Release(); dec->Release(); stream->Release();
-    if (decoded) m_failedImages.erase(url);
-    else fail();
 }
 
 // ─── tab strip ───────────────────────────────────────────────────────────────

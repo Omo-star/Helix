@@ -5,7 +5,8 @@
 #include <windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
-#include <wincodec.h>
+// WIC no longer needed — image decoding uses stb_image (cross-platform).
+// #include <wincodec.h>
 #include <string>
 #include <vector>
 #include <map>
@@ -67,7 +68,7 @@ private:
     ID2D1Factory*           m_factory   = nullptr;
     ID2D1HwndRenderTarget*  m_rt        = nullptr;
     IDWriteFactory*         m_dwrite    = nullptr;
-    IWICImagingFactory*     m_wic       = nullptr;
+    // IWICImagingFactory removed — stb_image replaces WIC for decoding.
 
     // ── persistent brushes ────────────────────────────────────────────────
     ID2D1SolidColorBrush*   m_textBrush  = nullptr;
