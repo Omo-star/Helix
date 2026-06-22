@@ -42,6 +42,9 @@ public:
 
     // Lifecycle
     virtual bool Init(void* nativeWindow) = 0;  // HWND, NSView*, GtkWidget*
+    // Set the native drawing context for the current frame. On Linux this is
+    // the cairo_t* from GTK's draw signal; on other platforms it's a no-op.
+    virtual void SetNativeContext(void* ctx) { (void)ctx; }
     virtual void Resize(int width, int height) = 0;
 
     // Frame

@@ -36,9 +36,10 @@ struct JsValue {
     }
     static JsValue number(double f) noexcept {
         if (!std::isnan(f) && !std::isinf(f)) {
-            int32_t i = (int32_t)f;
-            if (f == (double)i && !(f == 0.0 && std::signbit(f)))
-                return integer(i);
+            double truncated = std::trunc(f);
+            if (truncated >= (double)INT32_MIN && truncated <= (double)INT32_MAX
+                && f == truncated && !(f == 0.0 && std::signbit(f)))
+                return integer((int32_t)truncated);
         }
         JsValue v; v.tag = JsTag::Float64; v.u.f = f; return v;
     }

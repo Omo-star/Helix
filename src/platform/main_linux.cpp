@@ -65,21 +65,14 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
         g_measure = std::make_unique<PlatTextMeasure>(g_renderer.get());
     }
     g_renderer->Resize(w, h);
-    // The Linux renderer needs the cairo_t from GTK's draw signal.
-    // Cast through the interface since we know the concrete type on Linux.
-    // (LinuxRenderer::SetCairo is called here.)
-    {
-        // Direct cairo setup since we hold the context from GTK.
-        cairo_set_source_rgb(cr, 1, 1, 1);
-        cairo_paint(cr);
-    }
+    g_renderer->SetNativeContext(cr);
+    g_renderer->Clear({1, 1, 1, 1});
 
     if (g_tabs.empty() || !CurTab().page || !CurTab().page->dom) {
-        cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
-        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        cairo_set_font_size(cr, 16);
-        cairo_move_to(cr, 20, 30);
-        cairo_show_text(cr, CurTab().loading ? "Loading..." : "Navigate to a URL");
+        PlatFont font = g_renderer->CreateFont(16, false, false, false, "");
+        g_renderer->DrawText(CurTab().loading ? L"Loading..." : L"Navigate to a URL",
+                             20, 20, 800, 30, font, {0.5f, 0.5f, 0.5f, 1});
+        g_renderer->ReleaseFont(font);
         return FALSE;
     }
 
@@ -105,11 +98,6 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
             ps.images = &g_images;
             ps.hits = &hits;
             ps.fontCache = &g_fontCache;
-            // For Linux: the LinuxRenderer needs the cairo_t. Since we can't call
-            // SetCairo through the interface, we use the raw cairo directly for now.
-            // The PaintBoxTree calls go through IPlatformRenderer which works if
-            // the renderer's BeginFrame() captured the context.
-            // TODO: pass cairo_t to renderer via a SetContext method.
             PaintBoxTree(ps, *g_layoutRoot);
             tab.docHeight = g_layoutRoot->contentH + 32.f;
         }
@@ -124,12 +112,70 @@ static void on_url_activate(GtkEntry* entry, gpointer data) {
     const gchar* text = gtk_entry_get_text(entry);
     if (!text || g_tabs.empty()) return;
     std::string url(text);
-    // TODO: call Navigate() from browser_core
     Tab& tab = CurTab();
+
+    if (url == "helix://home") {
+        tab.page = std::make_shared<Page>();
+        tab.page->url = url;
+        tab.page->dom = ParseHtml(HomePageHtml());
+        tab.title = "Helix";
+        tab.url = url;
+        tab.scrollY = 0;
+        gtk_widget_queue_draw(g_drawingArea);
+        return;
+    }
+
+    if (LooksLikeUrl(url)) {
+        if (url.find("://") == std::string::npos) url = "https://" + url;
+    } else {
+        url = "https://www.bing.com/search?q=" + UrlEncodeQuery(url);
+    }
+
     tab.url = url;
     tab.title = "Loading...";
     tab.loading = true;
+    tab.scrollY = 0;
     gtk_widget_queue_draw(g_drawingArea);
+
+    // Fetch in background thread, update on main thread via g_idle_add
+    std::string fetchUrl = url;
+    std::thread([fetchUrl]() {
+        auto res = FetchUrl(fetchUrl);
+        auto* page = new Page();
+        page->url = fetchUrl;
+        if (res.success && !res.body.empty()) {
+            page->dom = ParseHtml(res.body);
+            LoadExternalStylesheets(page->dom, page->url);
+        } else {
+            page->error = res.error;
+        }
+        g_idle_add([](gpointer data) -> gboolean {
+            auto* p = static_cast<Page*>(data);
+            if (!g_tabs.empty()) {
+                Tab& tab = CurTab();
+                tab.page = std::shared_ptr<Page>(p);
+                tab.loading = false;
+                tab.title = "Page";
+                // Extract title from DOM
+                if (tab.page->dom) {
+                    std::function<std::string(const Node*)> findTitle = [&](const Node* n) -> std::string {
+                        if (n->tagName == "title") {
+                            for (auto& c : n->children) if (c->type == NodeType::Text) return c->text;
+                        }
+                        for (auto& c : n->children) { auto t = findTitle(c.get()); if (!t.empty()) return t; }
+                        return "";
+                    };
+                    std::string t = findTitle(tab.page->dom.get());
+                    if (!t.empty()) tab.title = t;
+                }
+                gtk_window_set_title(GTK_WINDOW(g_window), tab.title.c_str());
+                gtk_widget_queue_draw(g_drawingArea);
+            } else {
+                delete p;
+            }
+            return G_SOURCE_REMOVE;
+        }, page);
+    }).detach();
 }
 
 // ── toolbar buttons ──────────────────────────────────────────────────────────
@@ -256,6 +302,13 @@ int main(int argc, char* argv[]) {
     g_tabs[0].page->dom = ParseHtml(HomePageHtml());
 
     gtk_widget_show_all(g_window);
+    gtk_window_present(GTK_WINDOW(g_window));
+    gtk_window_set_keep_above(GTK_WINDOW(g_window), TRUE);
+    // Release keep-above after a brief delay so the window lands on top once
+    g_timeout_add(500, [](gpointer data) -> gboolean {
+        gtk_window_set_keep_above(GTK_WINDOW(data), FALSE);
+        return G_SOURCE_REMOVE;
+    }, g_window);
     gtk_main();
     return 0;
 }

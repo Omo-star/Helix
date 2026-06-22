@@ -42,11 +42,9 @@ public:
         m_width = width; m_height = height;
     }
 
-    // Cairo context is provided per-draw by GTK's draw signal; call SetCairo()
-    // from the draw callback before BeginFrame().
-    void SetCairo(cairo_t* cr) { m_cr = cr; }
+    void SetNativeContext(void* ctx) override { m_cr = (cairo_t*)ctx; }
 
-    void BeginFrame() override { /* m_cr set externally by draw callback */ }
+    void BeginFrame() override { /* m_cr set via SetNativeContext from draw callback */ }
     void EndFrame() override { m_cr = nullptr; }
 
     void Clear(PlatColor c) override {
