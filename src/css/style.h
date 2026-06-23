@@ -116,6 +116,9 @@ struct ComputedStyle {
     // Intrinsic-sizing keyword for width/height: 0=none,1=min-content,2=max-content,3=fit-content
     int      widthKeyword     = 0;
     int      heightKeyword    = 0;
+    // box-sizing: 0=content-box (default), 1=border-box
+    int      boxSizing        = 0;
+    bool     boxSizingSet     = false;
     bool     visibilitySet    = false;
     // List style
     bool     listStyleNone    = false;
@@ -240,6 +243,7 @@ struct ComputedStyle {
         if (child.objectFit != 0) out.objectFit = child.objectFit;
         if (child.widthKeyword != 0) out.widthKeyword = child.widthKeyword;
         if (child.heightKeyword != 0) out.heightKeyword = child.heightKeyword;
+        if (child.boxSizingSet) { out.boxSizing = child.boxSizing; out.boxSizingSet = true; }
         if (child.listStyleSet) { out.listStyleNone = child.listStyleNone; out.listStyleSet = true; }
         if (child.borderSpacing >= 0) out.borderSpacing = child.borderSpacing;
         if (child.flexDirectionSet) {

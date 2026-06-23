@@ -673,6 +673,13 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
     // Resolve width.
     float w = usedWidth(s, cbW);
     float bp = box.borderLeft + box.padLeft + box.borderRight + box.padRight;
+    // box-sizing: border-box — the specified width already includes padding and
+    // border, so subtract them to get the content width.
+    bool borderBox = (s.boxSizing == 1);
+    if (borderBox && w >= 0) w = std::max(0.f, w - bp);
+    // Vertical border+padding, used to convert border-box heights to content-box.
+    float vbp = box.borderTop + box.padTop + box.borderBottom + box.padBottom;
+    auto bbHeight = [&](float h) { return (borderBox && h >= 0) ? std::max(0.f, h - vbp) : h; };
     // Intrinsic-sizing keywords (min-content/max-content/fit-content).
     if (s.widthKeyword != 0) {
         float mc = maxContent(box);
@@ -697,9 +704,10 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
             w = std::max(0.f, cbW - box.marginLeft - box.marginRight - bp);
         }
     }
-    // min/max width clamp.
-    { float mw = usedMaxWidth(s, cbW); if (mw >= 0) w = std::min(w, mw); }
-    { float nw = usedMinWidth(s, cbW); if (nw >= 0) w = std::max(w, nw); }
+    // min/max width clamp. Under border-box these constraints also include
+    // padding+border, so reduce them to content-box before clamping.
+    { float mw = usedMaxWidth(s, cbW); if (mw >= 0) { if (borderBox) mw = std::max(0.f, mw - bp); w = std::min(w, mw); } }
+    { float nw = usedMinWidth(s, cbW); if (nw >= 0) { if (borderBox) nw = std::max(0.f, nw - bp); w = std::max(w, nw); } }
     box.contentW = w;
 
     // Auto-margin horizontal centering for block-level with definite width.
@@ -715,15 +723,15 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
 
     // Replaced: resolve height from intrinsic / CSS, no children.
     if (box.kind == BoxKind::Replaced) {
-        float h = usedHeight(s, cbH);
+        float h = bbHeight(usedHeight(s, cbH));
         if (box.intrinsicW > 0 && box.contentW <= 0) box.contentW = px(box.intrinsicW);
         if (h < 0) {
             if (box.intrinsicW > 0 && box.intrinsicH > 0 && box.contentW > 0)
                 h = box.contentW * (box.intrinsicH / box.intrinsicW);
             else h = box.intrinsicH > 0 ? px(box.intrinsicH) : 0;
         }
-        if (s.maxHeight >= 0) h = std::min(h, px(s.maxHeight));
-        if (s.minHeight >= 0) h = std::max(h, px(s.minHeight));
+        if (s.maxHeight >= 0) h = std::min(h, bbHeight(px(s.maxHeight)));
+        if (s.minHeight >= 0) h = std::max(h, bbHeight(px(s.minHeight)));
         box.contentH = h;
         return;
     }
@@ -731,15 +739,15 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
     // Tables lay out specially: cells in rows, shrink-to-fit overall width.
     if (box.kind == BoxKind::Table) {
         layoutTable(box);
-        float eh = usedHeight(s, cbH);
+        float eh = bbHeight(usedHeight(s, cbH));
         if (eh >= 0) box.contentH = eh;
-        if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, px(s.maxHeight));
-        if (s.minHeight >= 0) box.contentH = std::max(box.contentH, px(s.minHeight));
+        if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, bbHeight(px(s.maxHeight)));
+        if (s.minHeight >= 0) box.contentH = std::max(box.contentH, bbHeight(px(s.minHeight)));
         return;
     }
 
     // Establish inline formatting context or block formatting.
-    float explicitH = usedHeight(s, cbH);
+    float explicitH = bbHeight(usedHeight(s, cbH));
 
     if (s.isDisplayFlex()) {
         std::vector<LayoutBox*> positioned;
@@ -775,8 +783,8 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
     }
 
     // min/max height clamp on the final content height.
-    if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, px(s.maxHeight));
-    if (s.minHeight >= 0) box.contentH = std::max(box.contentH, px(s.minHeight));
+    if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, bbHeight(px(s.maxHeight)));
+    if (s.minHeight >= 0) box.contentH = std::max(box.contentH, bbHeight(px(s.minHeight)));
 }
 
 // Lay out the in-flow block-level children of `box`, stacking vertically with

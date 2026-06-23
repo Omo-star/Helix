@@ -866,6 +866,10 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "line-height") {
         float lh = ParseLineHeightValue(val, out.fontSize > 0 ? out.fontSize : 16.f);
         if (lh > 0) out.lineHeight = lh;
+    } else if (prop == "box-sizing") {
+        std::string v = sLower(sTrim(val));
+        out.boxSizing = (v == "border-box") ? 1 : 0;
+        out.boxSizingSet = true;
     } else if (prop == "object-fit") {
         std::string v = sLower(sTrim(val));
         out.objectFit = (v == "contain") ? 1 : (v == "cover") ? 2
