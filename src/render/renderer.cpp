@@ -185,8 +185,17 @@ bool Renderer::EnsureTarget() {
     RECT rc; GetClientRect(m_hwnd, &rc);
     m_width  = (UINT)(rc.right  - rc.left);
     m_height = (UINT)(rc.bottom - rc.top);
+    // Force 96 DPI so Direct2D DIPs == physical pixels. The layout engine works
+    // in physical pixels (m_width/m_height from GetClientRect), so the render
+    // target must use the same coordinate space. Otherwise on a high-DPI display
+    // (e.g. 125% scaling) the render target would be in scaled DIPs while layout
+    // is in physical px, and everything centered in layout space drifts off.
+    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, D2D1_ALPHA_MODE_UNKNOWN),
+        96.f, 96.f);
     if (FAILED(m_factory->CreateHwndRenderTarget(
-            D2D1::RenderTargetProperties(),
+            rtProps,
             D2D1::HwndRenderTargetProperties(m_hwnd, D2D1::SizeU(m_width, m_height)),
             &m_rt)))
         return false;
