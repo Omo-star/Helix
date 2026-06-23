@@ -125,31 +125,31 @@ inline const std::string& HomePageHtml() {
 <style>
 body {
     font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #0a0a0a;
-    color: #e0e0e0;
+    background: #f0e9dc;
+    color: #4a4033;
     margin: 0;
     padding: 60px 0;
     line-height: 1.6;
 }
 .w { width: 500px; margin-left: auto; margin-right: auto; }
-h1 { font-size: 40px; color: #fff; text-align: center; margin-bottom: 4px; }
-.accent { color: #6c63ff; }
-.sub { text-align: center; color: #888; font-size: 15px; }
-.sub2 { text-align: center; color: #555; font-size: 13px; margin-top: 4px; }
+h1 { font-size: 40px; color: #2e2820; text-align: center; margin-bottom: 4px; }
+.accent { color: #b07d3c; }
+.sub { text-align: center; color: #6b5f4d; font-size: 15px; }
+.sub2 { text-align: center; color: #9a8b73; font-size: 13px; margin-top: 4px; }
 .links { padding: 30px 0; }
 .links a {
-    display: block; background: #161616; border: 1px solid #2a2a2a;
+    display: block; background: #faf6ee; border: 1px solid #ddd2bd;
     border-radius: 8px; padding: 14px 20px; margin: 8px 0;
-    text-decoration: none; color: #d0d0d0; font-size: 15px;
+    text-decoration: none; color: #4a4033; font-size: 15px;
 }
-.url { color: #555; font-size: 12px; }
-.sep { border-top: 1px solid #1e1e1e; padding-top: 20px; margin-top: 20px; }
-h3 { font-size: 13px; color: #6c63ff; margin-bottom: 12px; }
-.key { display: block; padding: 3px 0; color: #888; font-size: 13px; }
-.key strong { color: #bbb; }
-.ft { border-top: 1px solid #1e1e1e; margin-top: 30px; padding-top: 20px; text-align: center; }
-.ft p { font-size: 12px; color: #444; }
-.tag { background: #1a1a2e; color: #6c63ff; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
+.url { color: #9a8b73; font-size: 12px; }
+.sep { border-top: 1px solid #ddd2bd; padding-top: 20px; margin-top: 20px; }
+h3 { font-size: 13px; color: #b07d3c; margin-bottom: 12px; }
+.key { display: block; padding: 3px 0; color: #6b5f4d; font-size: 13px; }
+.key strong { color: #2e2820; }
+.ft { border-top: 1px solid #ddd2bd; margin-top: 30px; padding-top: 20px; text-align: center; }
+.ft p { font-size: 12px; color: #9a8b73; }
+.tag { background: #e8dcc4; color: #b07d3c; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
 </style>
 </head>
 <body>
