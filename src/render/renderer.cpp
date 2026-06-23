@@ -1716,13 +1716,22 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         float docH = 0.f;
         // A malformed or pathological page must never take down the browser.
         try {
+            // The render target draws in physical pixels (pinned to 96 DPI), and
+            // the layout works in those same pixels. To make content render at the
+            // right physical size on a high-DPI display (instead of tiny), fold the
+            // monitor's DPI scale into the effective zoom: a 125% display lays out
+            // 25% larger. Centering still holds because layout + paint share one
+            // coordinate space (physical px).
+            UINT dpi = m_hwnd ? GetDpiForWindow(m_hwnd) : 96;
+            float dpiScale = (dpi >= 48) ? (float)dpi / 96.f : 1.f;
+            float effZoom = m_zoom * dpiScale;
             // Rebuild the layout tree only when something that affects geometry
             // changed; scrolling reuses the cached tree.
             bool reuse = m_layoutRoot
                       && m_layoutDocKey  == doc.get()
                       && m_layoutWKey    == m_width
                       && m_layoutHKey    == m_height
-                      && m_layoutZoomKey == m_zoom;
+                      && m_layoutZoomKey == effZoom;
             if (!reuse) {
                 LayoutInput in;
                 in.document  = doc.get();
@@ -1730,13 +1739,13 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                 in.measure   = this;
                 in.viewportW = std::max(100.f, (float)m_width);
                 in.viewportH = std::max(100.f, (float)m_height - topInset);
-                in.zoom      = m_zoom;
+                in.zoom      = effZoom;
                 in.baseUrl   = baseUrl;
                 m_layoutRoot   = LayoutDocument(in);
                 m_layoutDocKey = doc.get();
                 m_layoutWKey   = m_width;
                 m_layoutHKey   = m_height;
-                m_layoutZoomKey= m_zoom;
+                m_layoutZoomKey= effZoom;
                 m_anchorY.clear();
                 if (m_layoutRoot) CollectAnchors(*m_layoutRoot);
             }
