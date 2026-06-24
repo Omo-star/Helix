@@ -82,14 +82,6 @@ private:
     ID2D1SolidColorBrush*   m_tabTxtBrush= nullptr;
     ID2D1SolidColorBrush*   m_tabClsBrush= nullptr;
 
-    // ── text formats (zoom-scaled) ────────────────────────────────────────
-    IDWriteTextFormat*      m_fmtBody   = nullptr;
-    IDWriteTextFormat*      m_fmtBold   = nullptr;
-    IDWriteTextFormat*      m_fmtItalic = nullptr;
-    IDWriteTextFormat*      m_fmtCode   = nullptr;
-    IDWriteTextFormat*      m_fmtH1     = nullptr;
-    IDWriteTextFormat*      m_fmtH2     = nullptr;
-    IDWriteTextFormat*      m_fmtH3     = nullptr;
     IDWriteTextFormat*      m_fmtTab    = nullptr;   // tab titles (not zoom-scaled)
 
     float m_zoom = 1.f;
@@ -104,7 +96,6 @@ private:
     std::function<void(std::string)>    m_imageRequestCb;
 
     std::vector<ID2D1SolidColorBrush*>  m_tempBrushes;
-    std::vector<IDWriteTextFormat*>     m_tempFormats;
 
     HWND  m_hwnd   = nullptr;
     UINT  m_width  = 800;
@@ -121,50 +112,11 @@ private:
     void ReleaseTarget();
     void ReleaseBrushes();
     bool CreateBrushes();
-    void RecreateFormats();
     void CreateTabFont();
 
     void DrawTabStrip(const std::vector<TabEntry>& tabs, float h);
 
-    // ── paint context ─────────────────────────────────────────────────────
-    struct PaintCtx {
-        float y            = 0;
-        float x            = 32.f;
-        float contentW     = 700;
-        float scrollY      = 0;
-        float winH         = 600;
-        float topInset     = 0;
-        bool  bold         = false;
-        bool  italic       = false;
-        bool  isLink       = false;
-        bool  isCode       = false;
-        bool  dryRun       = false;
-        int   textAlign    = 0;       // 0=left, 1=center, 2=right
-        int   textTransform= 0;       // 0=none, 1=upper, 2=lower, 3=cap
-        bool  whiteSpaceNowrap = false;
-        int   listStyle    = 0;       // 0=none, 1=unordered, 2=ordered
-        int   listCounter  = 0;
-        std::string fontFamily;
-        std::string linkHref;
-        int   headingLevel = 0;
-        std::string baseUrl;
-        ID2D1SolidColorBrush* colorOverride = nullptr;
-        IDWriteTextFormat*    fmtOverride   = nullptr;
-        const Stylesheet*     sheet         = nullptr;
-        float lineHeightMul = 1.45f;
-        int   floatMode         = 0;      // parent's effective float mode for inherit
-        float floatBottom       = 0.f;
-        float lastMarginBot     = 0.f;    // previous sibling's bottom margin (for collapsing)
-        float containingBlockX  = 32.f;   // content-left of nearest positioned ancestor
-        float containingBlockY  = 0.f;    // content-top  of nearest positioned ancestor
-        float containingBlockW  = 700.f;  // content-width of nearest positioned ancestor
-        float absMaxY           = 0.f;    // max bottom-edge of out-of-flow children (dry-run only)
-    };
-
-    float WalkNode(const Node* node, PaintCtx& ctx);
-    IDWriteTextFormat* FormatFor(const PaintCtx& ctx) const;
-
-    // ── box-tree painter (new layout engine) ──────────────────────────────
+    // ── box-tree painter ───────────────────────────────────────────────────
     void PaintBox(const LayoutBox& box, float scrollY, float topInset, bool underFixed);
     void PaintLines(const LayoutBox& box, float scrollY, float topInset, bool underFixed);
     void PaintBoxDecorations(const LayoutBox& box, float scrollY, float topInset);
@@ -181,28 +133,7 @@ private:
     float m_layoutZoomKey = 0.f;
     void InvalidateLayout() { m_layoutRoot.reset(); m_layoutDocKey = nullptr; }
 
-    // Returns new y after drawing (or dry-run computing) wrapped text.
-    float DrawWrappedText(const std::wstring& text,
-                          float x, float y, float maxW,
-                          IDWriteTextFormat* fmt,
-                          ID2D1SolidColorBrush* brush,
-                          bool underline,
-                          const std::string& href,
-                          float scrollY,
-                          float topInset,
-                          float lineHeightMul = 1.45f,
-                          int   textAlign     = 0,
-                          bool  dryRun        = false,
-                          bool  nowrap        = false);
-
-    // Draw a preformatted block (pre element), returns new y.
-    float DrawPreBlock(const Node* node, PaintCtx& ctx);
-
     ID2D1SolidColorBrush* TempBrush(D2D1_COLOR_F color);
-    IDWriteTextFormat*    TempFormat(float size, bool bold, bool mono, bool italic,
-                                     const std::string& family = "");
-
-    std::wstring ToWide(const std::string& s);
     std::string  ResolveUrl(const std::string& href, const std::string& base);
 
     static Stylesheet CollectStylesheet(const Node* root);
