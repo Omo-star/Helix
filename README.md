@@ -7,7 +7,7 @@
 ![Engine](https://img.shields.io/badge/engine-from%20scratch-ff69b4?style=flat-square)
 ![Stars](https://img.shields.io/github/stars/overcharged-coder/Helix?style=flat-square)
 
-**Helix** is a web browser written from scratch in C++17 — its own HTML parser, DOM,
+**Helix** is a web browser written from scratch in C++17, with its own HTML parser, DOM,
 CSS engine, JavaScript engine, layout engine, and renderer. No Chromium, no WebView2,
 no CEF, no QtWebEngine. Everything that makes it a browser is hand-built.
 
@@ -16,23 +16,23 @@ native shell on each platform.
 
 ## What's built from scratch
 
-- **HTML** — hand-written tokenizer, parser, and DOM
-- **CSS** — cascade with combinators and attribute selectors, custom properties (`var()`),
+- **HTML**: hand-written tokenizer, parser, and DOM
+- **CSS**: cascade with combinators and attribute selectors, custom properties (`var()`),
   media queries, `calc()` / `clamp()` / `min()` / `max()`, viewport units, `box-sizing`,
   `object-fit`, flexbox, grid, tables, floats, positioning, `text-align` (incl. justify),
   `text-indent`, `text-decoration`, and more
-- **JavaScript** — lexer → parser → bytecode compiler → VM, with live DOM bindings
-- **Layout** — block / inline / float / table / flex / grid box-tree engine
-- **Rendering** — per-platform painter over the OS rasterizer
+- **JavaScript**: lexer → parser → bytecode compiler → VM, with live DOM bindings
+- **Layout**: block / inline / float / table / flex / grid box-tree engine
+- **Rendering**: per-platform painter over the OS rasterizer
 - Tabs, per-tab history, zoom, find-in-page, async image loading
 
 ## Dependencies
 
 Only three things are not hand-written:
 
-- **libcurl** — HTTP/HTTPS and TLS (you don't hand-roll TLS)
-- **stb_image** — JPEG/PNG/etc. decoding (vendored single header)
-- **OS drawing APIs** — Direct2D + DirectWrite (Windows), Core Graphics + Core Text
+- **libcurl**: HTTP/HTTPS and TLS (you don't hand-roll TLS)
+- **stb_image**: JPEG/PNG/etc. decoding (vendored single header)
+- **OS drawing APIs**: Direct2D + DirectWrite (Windows), Core Graphics + Core Text
   (macOS), GTK3 + Cairo + Pango (Linux). These only plot pixels, glyphs, and bitmaps;
   all layout and paint logic is Helix's own.
 
@@ -85,7 +85,7 @@ build\Release\helix-tests.exe layout
 build\Release\helix-tests.exe paint
 ```
 
-Fixtures live under `tests/fixtures` — each has an input file and an expected text
+Fixtures live under `tests/fixtures`. Each has an input file and an expected text
 snapshot. When engine behavior changes intentionally, change the implementation first,
 inspect the failing output, then update the snapshot only once the new behavior is correct.
 
