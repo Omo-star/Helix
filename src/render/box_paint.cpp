@@ -124,6 +124,28 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
         if (auto* b = TempBrush(ToD2Dc(s.bgColor)))
             m_rt->FillRectangle(D2D1::RectF(sx, sy, sx + bw, sy + bh), b);
     }
+    // Linear gradient (D2D native).
+    if (s.gradientSet && s.gradientStops.size() >= 2 && bw > 0 && bh > 0 && m_rt) {
+        float rad = s.gradientAngle * 3.14159265f / 180.f;
+        float dx = std::sin(rad), dy = -std::cos(rad);
+        float halfW = bw / 2, halfH = bh / 2;
+        float gradLen = std::abs(dx * bw) + std::abs(dy * bh);
+        D2D1_POINT_2F p0 = { sx + halfW - dx * gradLen / 2, sy + halfH - dy * gradLen / 2 };
+        D2D1_POINT_2F p1 = { sx + halfW + dx * gradLen / 2, sy + halfH + dy * gradLen / 2 };
+        std::vector<D2D1_GRADIENT_STOP> gstops;
+        for (auto& gs : s.gradientStops)
+            gstops.push_back({ gs.pos, D2D1::ColorF(gs.color.r, gs.color.g, gs.color.b, gs.color.a) });
+        ID2D1GradientStopCollection* coll = nullptr;
+        if (SUCCEEDED(m_rt->CreateGradientStopCollection(gstops.data(), (UINT32)gstops.size(), &coll)) && coll) {
+            ID2D1LinearGradientBrush* gb = nullptr;
+            if (SUCCEEDED(m_rt->CreateLinearGradientBrush(
+                    D2D1::LinearGradientBrushProperties(p0, p1), coll, &gb)) && gb) {
+                m_rt->FillRectangle(D2D1::RectF(sx, sy, sx + bw, sy + bh), gb);
+                gb->Release();
+            }
+            coll->Release();
+        }
+    }
     // Background image (skip no-repeat fixed: anchored to viewport origin, invisible here).
     if (!s.backgroundImage.empty() && !(s.bgNoRepeat && s.bgFixed)) {
         std::string url = ResolveUrl(s.backgroundImage, m_curBaseUrl);

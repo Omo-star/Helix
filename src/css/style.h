@@ -154,6 +154,11 @@ struct ComputedStyle {
     // Grid tracks remain CSS tokens until their containing block is known.
     std::vector<std::string> gridTemplateColumns;
     bool     gridTemplateColumnsSet = false;
+    // Linear gradient.
+    struct GradientStop { CssColor color; float pos = -1; }; // pos: 0..1, -1=auto
+    float    gradientAngle    = 180;  // degrees (0=to top, 90=to right, 180=to bottom)
+    std::vector<GradientStop> gradientStops;
+    bool     gradientSet      = false;
     // Custom properties stay as tokens until the element has inherited its
     // parent's variables; declarations containing var() are resolved then.
     std::map<std::string, std::string> customProperties;
@@ -279,6 +284,7 @@ struct ComputedStyle {
         if (child.flexBasisSet) { out.flexBasis = child.flexBasis; out.flexBasisSet = true; }
         if (child.flexWrapSet) { out.flexWrap = child.flexWrap; out.flexWrapSet = true; }
         if (child.alignSelfSet) { out.alignSelf = child.alignSelf; out.alignSelfSet = true; }
+        if (child.gradientSet) { out.gradientAngle = child.gradientAngle; out.gradientStops = child.gradientStops; out.gradientSet = true; }
         if (child.flexGap >= 0) out.flexGap = child.flexGap;
         if (child.gridTemplateColumnsSet) {
             out.gridTemplateColumns = child.gridTemplateColumns;

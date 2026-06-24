@@ -450,6 +450,101 @@ static std::vector<std::string> SplitGridTracks(const std::string& value) {
     return tracks;
 }
 
+// Parse "linear-gradient(...)" into angle + color stops. Returns true if valid.
+static bool ParseLinearGradient(const std::string& raw, ComputedStyle& out) {
+    std::string low = sLower(raw);
+    size_t start = low.find("linear-gradient(");
+    if (start == std::string::npos) return false;
+    size_t inner = start + 16;
+    // Find matching ')'.
+    int depth = 1; size_t end = inner;
+    for (; end < raw.size() && depth > 0; ++end)
+        if (raw[end] == '(') ++depth; else if (raw[end] == ')') --depth;
+    if (depth != 0) return false;
+    std::string body = sTrim(raw.substr(inner, end - inner - 1));
+    if (body.empty()) return false;
+
+    // Split on commas, respecting parens (for rgb()/hsl()).
+    std::vector<std::string> parts;
+    { std::string cur; int d = 0;
+      for (char c : body) {
+          if (c == '(') ++d; else if (c == ')' && d > 0) --d;
+          if (c == ',' && d == 0) { parts.push_back(sTrim(cur)); cur.clear(); }
+          else cur += c;
+      }
+      if (!cur.empty()) parts.push_back(sTrim(cur));
+    }
+    if (parts.size() < 2) return false;
+
+    float angle = 180;  // default: to bottom
+    size_t colorStart = 0;
+    {
+        std::string first = sLower(parts[0]);
+        bool isDir = false;
+        if (first.find("to ") == 0) {
+            isDir = true;
+            if (first.find("top") != std::string::npos && first.find("right") != std::string::npos) angle = 45;
+            else if (first.find("right") != std::string::npos && first.find("bottom") != std::string::npos) angle = 135;
+            else if (first.find("bottom") != std::string::npos && first.find("left") != std::string::npos) angle = 225;
+            else if (first.find("top") != std::string::npos && first.find("left") != std::string::npos) angle = 315;
+            else if (first.find("top") != std::string::npos) angle = 0;
+            else if (first.find("right") != std::string::npos) angle = 90;
+            else if (first.find("bottom") != std::string::npos) angle = 180;
+            else if (first.find("left") != std::string::npos) angle = 270;
+        }
+        if (!isDir) {
+            // Try numeric angle (e.g. "45deg")
+            size_t deg = first.find("deg");
+            if (deg != std::string::npos) {
+                try { angle = std::stof(first.substr(0, deg)); isDir = true; } catch (...) {}
+            } else if (!first.empty() && (first[0] == '-' || first[0] == '+' || std::isdigit((unsigned char)first[0]))) {
+                try { angle = std::stof(first); isDir = true; } catch (...) {}
+            }
+        }
+        colorStart = isDir ? 1 : 0;
+    }
+
+    std::vector<ComputedStyle::GradientStop> stops;
+    for (size_t i = colorStart; i < parts.size(); ++i) {
+        std::string p = sTrim(parts[i]);
+        // Try to split "color position" — the position is the last token if it ends with % or is a length.
+        float pos = -1;
+        size_t lastSpace = p.rfind(' ');
+        std::string colorStr = p;
+        if (lastSpace != std::string::npos) {
+            std::string posTok = sLower(sTrim(p.substr(lastSpace + 1)));
+            bool hasPct = (!posTok.empty() && posTok.back() == '%');
+            float pv = -1;
+            if (hasPct) { try { pv = std::stof(posTok.substr(0, posTok.size() - 1)) / 100.f; } catch (...) {} }
+            else { float l = ParseLength(posTok); if (l > -1e5f) pv = l; }  // px position (approx as fraction later)
+            if (pv >= 0) { pos = pv; colorStr = sTrim(p.substr(0, lastSpace)); }
+        }
+        CssColor c = ParseCssColor(colorStr);
+        if (!c.valid) continue;
+        stops.push_back({ c, pos });
+    }
+    if (stops.size() < 2) return false;
+
+    // Auto-distribute missing stop positions.
+    if (stops.front().pos < 0) stops.front().pos = 0;
+    if (stops.back().pos < 0) stops.back().pos = 1;
+    for (size_t i = 1; i + 1 < stops.size(); ++i) {
+        if (stops[i].pos < 0) {
+            size_t j = i + 1;
+            while (j < stops.size() && stops[j].pos < 0) ++j;
+            float from = stops[i - 1].pos, to = stops[j].pos;
+            float step = (to - from) / (float)(j - i + 1);
+            for (size_t k = i; k < j; ++k)
+                stops[k].pos = from + step * (float)(k - i + 1);
+        }
+    }
+
+    out.gradientAngle = angle;
+    out.gradientStops = std::move(stops);
+    out.gradientSet = true;
+    return true;
+}
+
 static void ApplyDeclaration(const std::string& prop,
                              const std::string& val,
                              ComputedStyle& out) {
@@ -463,6 +558,10 @@ static void ApplyDeclaration(const std::string& prop,
         // Parse into locals first; if the value is invalid (e.g. two colors
         // like "red pink") drop the whole declaration per CSS error handling.
         std::string low = sLower(val);
+        if (low.find("linear-gradient(") != std::string::npos) {
+            ParseLinearGradient(val, out);
+            return;
+        }
         std::string bgImg;
         bool noRepeat = (low.find("no-repeat") != std::string::npos);
         bool fixed = (low.find("fixed") != std::string::npos);
@@ -536,7 +635,9 @@ static void ApplyDeclaration(const std::string& prop,
         std::string low = sLower(val);
         out.backgroundImage.clear();
         out.backgroundImageSet = true;
-        if (low.find("url(") != std::string::npos) {
+        if (low.find("linear-gradient(") != std::string::npos) {
+            ParseLinearGradient(val, out);
+        } else if (low.find("url(") != std::string::npos) {
             size_t us = low.find("url("), ue = val.find(')', us + 4);
             if (ue != std::string::npos) {
                 std::string url = sTrim(val.substr(us + 4, ue - us - 4));

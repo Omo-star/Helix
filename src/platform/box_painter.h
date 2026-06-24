@@ -53,6 +53,53 @@ inline void PaintBoxDecorations(PaintState& ps, const LayoutBox& box) {
     if (s.bgColor.valid && s.bgColor.a > 0.001f) {
         ps.r->FillRect(sx, sy, bw, bh, ToPlatColor(s.bgColor));
     }
+    // Linear gradient
+    if (s.gradientSet && s.gradientStops.size() >= 2 && bw > 0 && bh > 0) {
+        float rad = s.gradientAngle * 3.14159265f / 180.f;
+        float dx = std::sin(rad), dy = -std::cos(rad);
+        float halfW = bw / 2, halfH = bh / 2;
+        float gradLen = std::abs(dx * bw) + std::abs(dy * bh);
+        if (gradLen < 1) gradLen = 1;
+        float cx = sx + halfW, cy = sy + halfH;
+        int steps = (int)std::max(bw, bh);
+        if (steps > 400) steps = 400;
+        float stripW = (dx != 0 && std::abs(dy) < 0.001f) ? bw / steps : bw;
+        float stripH = (dy != 0 && std::abs(dx) < 0.001f) ? bh / steps : bh;
+        bool horizontal = std::abs(dx) > std::abs(dy);
+        for (int i = 0; i < steps; ++i) {
+            float t;
+            float rx, ry, rw, rh;
+            if (horizontal) {
+                rw = bw / steps + 1; rh = bh;
+                rx = sx + i * (bw / steps); ry = sy;
+                float px = rx + rw / 2 - cx, py = 0;
+                t = (px * dx + py * dy) / (gradLen / 2) * 0.5f + 0.5f;
+            } else {
+                rw = bw; rh = bh / steps + 1;
+                rx = sx; ry = sy + i * (bh / steps);
+                float px = 0, py = ry + rh / 2 - cy;
+                t = (px * dx + py * dy) / (gradLen / 2) * 0.5f + 0.5f;
+            }
+            t = std::max(0.f, std::min(1.f, t));
+            // Find the two stops surrounding t.
+            size_t si = 0;
+            for (size_t j = 1; j < s.gradientStops.size(); ++j)
+                if (s.gradientStops[j].pos <= t) si = j;
+            size_t ei = std::min(si + 1, s.gradientStops.size() - 1);
+            float range = s.gradientStops[ei].pos - s.gradientStops[si].pos;
+            float frac = range > 0.001f ? (t - s.gradientStops[si].pos) / range : 0.f;
+            frac = std::max(0.f, std::min(1.f, frac));
+            auto& c0 = s.gradientStops[si].color;
+            auto& c1 = s.gradientStops[ei].color;
+            PlatColor gc = {
+                c0.r + (c1.r - c0.r) * frac,
+                c0.g + (c1.g - c0.g) * frac,
+                c0.b + (c1.b - c0.b) * frac,
+                c0.a + (c1.a - c0.a) * frac
+            };
+            ps.r->FillRect(rx, ry, rw, rh, gc);
+        }
+    }
 
     // Background image
     if (!s.backgroundImage.empty() && !(s.bgNoRepeat && s.bgFixed) && ps.images) {
