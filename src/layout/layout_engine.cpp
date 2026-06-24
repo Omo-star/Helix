@@ -229,6 +229,14 @@ void ApplyUaDefaults(const std::string& tag, ComputedStyle& s) {
     else if (tag == "a") { if (!s.underline) s.underline = true; }
     else if (tag == "u" || tag == "ins") { if (!s.noUnderline) s.underline = true; }
     else if (tag == "s" || tag == "strike" || tag == "del") { s.lineThrough = true; }
+    else if (tag == "sub") {
+        if (!s.verticalAlignSet) { s.verticalAlign = 1; s.verticalAlignSet = true; }
+        if (s.fontSize > 0) s.fontSize *= 0.8f;
+    }
+    else if (tag == "sup") {
+        if (!s.verticalAlignSet) { s.verticalAlign = 2; s.verticalAlignSet = true; }
+        if (s.fontSize > 0) s.fontSize *= 0.8f;
+    }
 }
 
 // ─── box construction ────────────────────────────────────────────────────────
@@ -1213,11 +1221,16 @@ struct InlineItem {
     LayoutBox*   box = nullptr;     // style source (text) or atomic box
     FontKey      font;
     float        ascent = 0, lineH = 0;
+    int          vAlign = 0;        // effective vertical-align from inline ancestors
 };
 
-// Flatten inline-level content into a stream of items.
-static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& items) {
+// Flatten inline-level content into a stream of items. `parentVAlign` carries the
+// vertical-align of the enclosing inline box down to its text/atomic descendants,
+// since vertical-align applies to the inline element, not the text node it wraps.
+static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& items,
+                          int parentVAlign = 0) {
     DepthScope _d; if (g_depth > kMaxDepth) return;
+    int va = box->style.verticalAlignSet ? box->style.verticalAlign : parentVAlign;
     if (box->kind == BoxKind::Text) {
         FontKey f = E.fontFor(box->style);
         float lh = E.lineHeightFor(box->style);
@@ -1228,7 +1241,7 @@ static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& it
             if (IsSpace(t[i])) {
                 InlineItem it; it.type = InlineItem::Space; it.box = box; it.font = f;
                 it.width = E.in.measure ? E.in.measure->SpaceWidth(f) : f.size * 0.3f;
-                it.ascent = asc; it.lineH = lh;
+                it.ascent = asc; it.lineH = lh; it.vAlign = va;
                 items.push_back(it);
                 i++;
                 continue;
@@ -1238,7 +1251,7 @@ static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& it
             std::wstring word = t.substr(i, j - i);
             InlineItem it; it.type = InlineItem::Word; it.text = word; it.box = box; it.font = f;
             it.width = E.in.measure ? E.in.measure->MeasureText(word, f) : (float)word.size() * f.size * 0.5f;
-            it.ascent = asc; it.lineH = lh;
+            it.ascent = asc; it.lineH = lh; it.vAlign = va;
             items.push_back(it);
             i = j;
         }
@@ -1258,11 +1271,12 @@ static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& it
         FontKey f = E.fontFor(box->style);
         it.font = f; it.lineH = box->marginBoxH();
         it.ascent = box->marginBoxH();  // baseline at bottom for replaced
+        it.vAlign = va;
         items.push_back(it);
         return;
     }
-    // Inline box (span/a/em…): recurse into children, carrying its style.
-    for (auto& k : box->kids) CollectInline(E, k.get(), items);
+    // Inline box (span/a/em…): recurse into children, carrying its vertical-align.
+    for (auto& k : box->kids) CollectInline(E, k.get(), items, va);
 }
 
 float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
@@ -1365,19 +1379,33 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
             frag.src = it.box;
             frag.x = fx;
             frag.w = it.width;
-            if (it.type == InlineItem::Atomic) {
+            bool atomic = (it.type == InlineItem::Atomic);
+            if (atomic) {
                 // bottom-align to baseline: top so that bottom sits on baseline.
                 frag.h = it.box->marginBoxH();
                 frag.baseline = frag.h;
                 frag.y = y + lineAsc - frag.baseline;
-                // place the atomic box at the fragment position.
-                it.box->x = fx + it.box->marginLeft;
-                it.box->y = frag.y + it.box->marginTop;
             } else {
                 frag.text = it.text;
                 frag.h = it.lineH;
                 frag.baseline = it.ascent;
                 frag.y = y + (lineAsc - it.ascent);
+            }
+            // vertical-align: shift the fragment relative to the baseline / line box.
+            if (it.vAlign != 0) {
+                float fsz = it.font.size > 0 ? it.font.size : it.lineH;
+                switch (it.vAlign) {
+                    case 1: frag.y += fsz * 0.15f; break;             // sub
+                    case 2: frag.y -= fsz * 0.30f; break;             // super
+                    case 3: frag.y = y + (lineH - frag.h) * 0.5f; break; // middle
+                    case 4: frag.y = y; break;                        // top
+                    case 5: frag.y = y + lineH - frag.h; break;       // bottom
+                }
+            }
+            if (atomic) {
+                // place the atomic box at the (possibly shifted) fragment position.
+                it.box->x = fx + it.box->marginLeft;
+                it.box->y = frag.y + it.box->marginTop;
             }
             line.frags.push_back(frag);
             fx += it.width;

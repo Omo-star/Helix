@@ -928,6 +928,15 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "text-indent") {
         float f = ParseLength(sTrim(val));
         if (f > -1e5f) { out.textIndent = f; out.textIndentSet = true; }
+    } else if (prop == "vertical-align") {
+        std::string v = sLower(sTrim(val));
+        out.verticalAlignSet = true;
+        if      (v == "sub")        out.verticalAlign = 1;
+        else if (v == "super")      out.verticalAlign = 2;
+        else if (v == "middle")     out.verticalAlign = 3;
+        else if (v == "top" || v == "text-top")       out.verticalAlign = 4;
+        else if (v == "bottom" || v == "text-bottom") out.verticalAlign = 5;
+        else                        out.verticalAlign = 0;  // baseline
     } else if (prop == "float") {
         std::string v = sLower(sTrim(val));
         if      (v == "left")    out.floatMode = 1;
