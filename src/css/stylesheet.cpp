@@ -626,7 +626,11 @@ static void ApplyDeclaration(const std::string& prop,
             }
         }
     } else if (prop == "text-decoration" || prop == "text-decoration-line") {
-        out.underline = (sLower(val).find("underline") != std::string::npos);
+        std::string v = sLower(val);
+        out.underline = (v.find("underline") != std::string::npos);
+        out.lineThrough = (v.find("line-through") != std::string::npos);
+        // "none" explicitly removes decoration, including the default link underline.
+        out.noUnderline = (v.find("none") != std::string::npos);
     } else if (prop == "text-transform") {
         std::string v = sLower(val);
         out.textTransformSet = true;

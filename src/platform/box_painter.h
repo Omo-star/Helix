@@ -141,9 +141,15 @@ inline void PaintLines(PaintState& ps, const LayoutBox& box) {
             PlatFont font = GetOrCreateFont(ps, fk);
             PlatColor color = fs.color.valid ? ToPlatColor(fs.color)
                             : (!frag.src->href.empty() ? PlatColor{0.1f,0.1f,0.8f,1} : PlatColor{0,0,0,1});
-            bool underline = fs.underline || !frag.src->href.empty();
+            bool underline = !fs.noUnderline && (fs.underline || !frag.src->href.empty());
             ps.r->DrawText(frag.text, frag.x, sy, frag.w + 4.f, frag.h * 2.f + 4.f,
                            font, color, underline);
+            if (fs.lineThrough) {
+                // Strike line at roughly the text's x-height midpoint.
+                float thick = std::max(1.f, fk.size / 14.f);
+                float strikeY = sy + frag.h * 0.5f - thick * 0.5f;
+                ps.r->FillRect(frag.x, strikeY, frag.w, thick, color);
+            }
             if (ps.hits && !frag.src->href.empty())
                 ps.hits->push_back({ frag.x, sy, frag.w, frag.h, frag.src->href });
         }

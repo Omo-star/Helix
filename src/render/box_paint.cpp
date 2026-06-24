@@ -307,10 +307,11 @@ void Renderer::PaintLines(const LayoutBox& box, float scrollY, float topInset, b
             IDWriteTextLayout* lay = nullptr;
             if (SUCCEEDED(m_dwrite->CreateTextLayout(frag.text.c_str(), (UINT32)frag.text.size(),
                     fmt, frag.w + 4.f, frag.h * 2.f + 4.f, &lay)) && lay) {
-                if (fs.underline || !frag.src->href.empty()) {
-                    DWRITE_TEXT_RANGE all{ 0, (UINT32)frag.text.size() };
+                DWRITE_TEXT_RANGE all{ 0, (UINT32)frag.text.size() };
+                if (!fs.noUnderline && (fs.underline || !frag.src->href.empty()))
                     lay->SetUnderline(TRUE, all);
-                }
+                if (fs.lineThrough)
+                    lay->SetStrikethrough(TRUE, all);
                 if (!m_searchQuery.empty() && m_findBrush) {
                     std::wstring low = frag.text, q = m_searchQuery;
                     std::transform(low.begin(), low.end(), low.begin(), ::towlower);

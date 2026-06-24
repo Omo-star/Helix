@@ -43,6 +43,8 @@ struct ComputedStyle {
     bool     italic       = false;
     bool     italicSet    = false;
     bool     underline    = false;
+    bool     lineThrough  = false;   // text-decoration: line-through
+    bool     noUnderline  = false;   // text-decoration: none (overrides link underline)
     // Display: 0=unset, 1=block, 2=inline, 3=none, 4=flex, 5=table, 6=table-cell, 11=grid
     int      display      = 0;
     // Box model (kCssNotSet = not set, kCssAuto = auto for margins)
@@ -191,6 +193,8 @@ struct ComputedStyle {
         if (child.boldSet)   { out.bold = child.bold; out.boldSet = true; }
         if (child.italicSet) { out.italic = child.italic; out.italicSet = true; }
         if (child.underline)    out.underline   = true;
+        if (child.lineThrough)  out.lineThrough = true;
+        if (child.noUnderline)  out.noUnderline = true;
         if (child.display != 0)     out.display      = child.display;
         if (child.marginTopSet())    out.marginTop    = child.marginTop;
         if (child.marginRightSet())  out.marginRight  = child.marginRight;

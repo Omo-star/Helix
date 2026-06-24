@@ -184,6 +184,7 @@ void InheritInto(ComputedStyle& s, const ComputedStyle& parent) {
     if (!s.visibilitySet && parent.visibilitySet) { s.visibilityHidden = parent.visibilityHidden; s.visibilitySet = true; }
     if (!s.listStyleSet && parent.listStyleSet)   { s.listStyleNone = parent.listStyleNone; s.listStyleSet = true; }
     if (parent.underline) s.underline = true;   // text-decoration propagates visually
+    if (parent.lineThrough) s.lineThrough = true;
     for (const auto& [name, value] : parent.customProperties)
         if (s.customProperties.find(name) == s.customProperties.end())
             s.customProperties[name] = value;
@@ -225,6 +226,8 @@ void ApplyUaDefaults(const std::string& tag, ComputedStyle& s) {
     else if (tag == "code" || tag == "tt" || tag == "kbd" || tag == "samp") { setMono(); }
     else if (tag == "small") { if (s.fontSize <= 0) s.fontSize = 13; }
     else if (tag == "a") { if (!s.underline) s.underline = true; }
+    else if (tag == "u" || tag == "ins") { if (!s.noUnderline) s.underline = true; }
+    else if (tag == "s" || tag == "strike" || tag == "del") { s.lineThrough = true; }
 }
 
 // ─── box construction ────────────────────────────────────────────────────────
