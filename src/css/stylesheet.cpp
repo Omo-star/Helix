@@ -921,9 +921,13 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "text-align") {
         std::string v = sLower(sTrim(val));
         out.textAlignSet = true;
-        if      (v == "center") out.textAlign = 1;
-        else if (v == "right")  out.textAlign = 2;
-        else                    out.textAlign = 0;
+        if      (v == "center")  out.textAlign = 1;
+        else if (v == "right")   out.textAlign = 2;
+        else if (v == "justify") out.textAlign = 3;
+        else                     out.textAlign = 0;
+    } else if (prop == "text-indent") {
+        float f = ParseLength(sTrim(val));
+        if (f > -1e5f) { out.textIndent = f; out.textIndentSet = true; }
     } else if (prop == "float") {
         std::string v = sLower(sTrim(val));
         if      (v == "left")    out.floatMode = 1;

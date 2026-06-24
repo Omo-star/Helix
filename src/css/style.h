@@ -69,8 +69,10 @@ struct ComputedStyle {
     float    borderRadius = 0;
     // Text
     float    lineHeight      = 0;
-    int      textAlign       = 0;      // 0=left, 1=center, 2=right
+    int      textAlign       = 0;      // 0=left, 1=center, 2=right, 3=justify
     bool     textAlignSet    = false;
+    float    textIndent      = 0;      // first-line indent (device px before zoom)
+    bool     textIndentSet   = false;
     int      textTransform   = 0;      // 0=none, 1=uppercase, 2=lowercase, 3=capitalize
     bool     textTransformSet= false;
     bool     whiteSpaceNowrap= false;
@@ -217,6 +219,7 @@ struct ComputedStyle {
         if (child.borderRadius > 0)  out.borderRadius  = child.borderRadius;
         if (child.lineHeight   > 0)  out.lineHeight    = child.lineHeight;
         if (child.textAlignSet) { out.textAlign = child.textAlign; out.textAlignSet = true; }
+        if (child.textIndentSet) { out.textIndent = child.textIndent; out.textIndentSet = true; }
         if (child.textTransformSet) { out.textTransform = child.textTransform; out.textTransformSet = true; }
         if (child.whiteSpaceSet) { out.whiteSpaceNowrap = child.whiteSpaceNowrap; out.whiteSpacePre = child.whiteSpacePre; out.whiteSpaceSet = true; }
         if (child.width        >= 0) out.width     = child.width;

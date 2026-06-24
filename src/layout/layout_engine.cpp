@@ -176,6 +176,7 @@ void InheritInto(ComputedStyle& s, const ComputedStyle& parent) {
     if (s.fontFamily.empty())                            s.fontFamily = parent.fontFamily;
     if (s.lineHeight <= 0 && parent.lineHeight > 0)      s.lineHeight = parent.lineHeight;
     if (!s.textAlignSet && parent.textAlignSet) { s.textAlign = parent.textAlign; s.textAlignSet = true; }
+    if (!s.textIndentSet && parent.textIndentSet) { s.textIndent = parent.textIndent; s.textIndentSet = true; }
     if (!s.textTransformSet && parent.textTransformSet) { s.textTransform = parent.textTransform; s.textTransformSet = true; }
     if (!s.whiteSpaceSet && parent.whiteSpaceSet) {
         s.whiteSpaceNowrap = parent.whiteSpaceNowrap;
@@ -1279,6 +1280,9 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
     size_t i = 0;
     box.lines.clear();
 
+    float indent = px(box.style.textIndent);  // applies to the first line only
+    bool firstLine = true;
+
     while (i < items.size()) {
         // Determine usable horizontal band at this y (consult floats).
         float probeH = 0;
@@ -1292,6 +1296,9 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
             lineLeft = cLeft; lineRight = cRight;
         }
         float avail = lineRight - lineLeft;
+        // text-indent narrows the first line's usable width.
+        float lineIndent = (firstLine && indent < avail) ? indent : 0.f;
+        avail -= lineIndent;
 
         // Greedily pack a line.
         LineBox line;
@@ -1338,11 +1345,22 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
         else if (align == 1) offset = (avail - lineWidth) / 2; // center
         if (offset < 0) offset = 0;
 
+        // text-align: justify — spread slack across the spaces, but never on the
+        // last line of the block or a line ended by <br>.
+        float justifyExtra = 0.f;
+        if (align == 3 && !brk && i < items.size()) {
+            int spaceCount = 0;
+            for (size_t idx : chosen)
+                if (items[idx].type == InlineItem::Space) ++spaceCount;
+            float slack = avail - lineWidth;
+            if (spaceCount > 0 && slack > 0) justifyExtra = slack / spaceCount;
+        }
+
         // Place fragments.
-        float fx = lineLeft + offset;
+        float fx = lineLeft + lineIndent + offset;
         for (size_t idx : chosen) {
             InlineItem& it = items[idx];
-            if (it.type == InlineItem::Space) { fx += it.width; continue; }
+            if (it.type == InlineItem::Space) { fx += it.width + justifyExtra; continue; }
             InlineFrag frag;
             frag.src = it.box;
             frag.x = fx;
@@ -1367,6 +1385,7 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
         line.w = lineWidth; line.h = lineH; line.baseline = lineAsc;
         if (!line.frags.empty() || brk) box.lines.push_back(line);
 
+        firstLine = false;
         y += lineH;
         if (lineStart == i && !brk) { i++; }  // safety: avoid infinite loop
     }
