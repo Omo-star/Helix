@@ -371,6 +371,63 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         obj->setProp("parentElement", JsValue::null());
     }
 
+    // Sibling traversal
+    if (raw && raw->parent) {
+        const auto& siblings = raw->parent->children;
+        // nextElementSibling / previousElementSibling
+        bool foundSelf = false;
+        std::shared_ptr<Node> prevElem, nextElem;
+        for (size_t si = 0; si < siblings.size(); ++si) {
+            if (siblings[si].get() == raw) {
+                foundSelf = true;
+                continue;
+            }
+            if (siblings[si]->type == NodeType::Element) {
+                if (!foundSelf) prevElem = siblings[si];
+                else if (!nextElem) nextElem = siblings[si];
+            }
+        }
+        obj->setProp("nextElementSibling",     nextElem ? wrapNodeInternal(vm, nextElem, false) : JsValue::null());
+        obj->setProp("previousElementSibling", prevElem ? wrapNodeInternal(vm, prevElem, false) : JsValue::null());
+    } else {
+        obj->setProp("nextElementSibling",     JsValue::null());
+        obj->setProp("previousElementSibling", JsValue::null());
+    }
+
+    // dataset — proxy for data-* attributes.
+    {
+        auto* ds = vm.gc().newObject(ObjKind::Plain);
+        if (raw) {
+            for (auto& [k, v] : raw->attrs) {
+                if (k.rfind("data-", 0) == 0) {
+                    // Convert "data-my-attr" to "myAttr" (camelCase).
+                    std::string camel;
+                    bool upper = false;
+                    for (size_t ci = 5; ci < k.size(); ++ci) {
+                        if (k[ci] == '-') { upper = true; continue; }
+                        camel += upper ? (char)std::toupper((unsigned char)k[ci]) : k[ci];
+                        upper = false;
+                    }
+                    ds->setProp(camel, vm.str(v));
+                }
+            }
+        }
+        obj->setProp("dataset", JsValue::object(ds));
+    }
+
+    // Layout dimension stubs (sites read these to check visibility/size).
+    obj->setProp("offsetWidth",  JsValue::integer(0));
+    obj->setProp("offsetHeight", JsValue::integer(0));
+    obj->setProp("offsetTop",    JsValue::integer(0));
+    obj->setProp("offsetLeft",   JsValue::integer(0));
+    obj->setProp("offsetParent", JsValue::null());
+    obj->setProp("clientWidth",  JsValue::integer(0));
+    obj->setProp("clientHeight", JsValue::integer(0));
+    obj->setProp("scrollWidth",  JsValue::integer(0));
+    obj->setProp("scrollHeight", JsValue::integer(0));
+    obj->setProp("scrollTop",    JsValue::integer(0));
+    obj->setProp("scrollLeft",   JsValue::integer(0));
+
     // DOM mutations
     addNativeM("appendChild", NATIVE("appendChild") {
         Node* n = unwrapNode(thisVal);
@@ -478,6 +535,12 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         newNode->text = ARG_STR(0);
         g_nodeStore[newNode.get()] = newNode;
         return wrapNode(vm, newNode);
+    });
+    addNativeM("createDocumentFragment", NATIVE("createDocumentFragment") {
+        auto frag = Node::makeElement("#document-fragment");
+        frag->type = NodeType::Document;
+        g_nodeStore[frag.get()] = frag;
+        return wrapNode(vm, frag);
     });
 
     addNativeM("addEventListener", NATIVE("addEventListener") {
@@ -851,6 +914,50 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         NATIVE("win_addEventListener") { return JsValue::undefined(); }, "addEventListener")));
     vm.setGlobal("removeEventListener", JsValue::object(vm.gc().newNativeFunction(
         NATIVE("win_removeEventListener") { return JsValue::undefined(); }, "removeEventListener")));
+
+    // window.scrollTo / scroll / open
+    vm.setGlobal("scrollTo", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("scrollTo") { return JsValue::undefined(); }, "scrollTo")));
+    vm.setGlobal("scroll", vm.getGlobal("scrollTo"));
+    vm.setGlobal("scrollBy", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("scrollBy") { return JsValue::undefined(); }, "scrollBy")));
+    vm.setGlobal("open", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("window_open") { return JsValue::null(); }, "open")));
+    vm.setGlobal("close", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("window_close") { return JsValue::undefined(); }, "close")));
+    vm.setGlobal("focus", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("window_focus") { return JsValue::undefined(); }, "focus")));
+    vm.setGlobal("blur", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("window_blur") { return JsValue::undefined(); }, "blur")));
+    vm.setGlobal("print", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("window_print") { return JsValue::undefined(); }, "print")));
+    vm.setGlobal("atob", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("atob") {
+            // Minimal base64 decode.
+            std::string input = ARG_STR(0), out;
+            static const std::string b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            int val = 0, bits = -8;
+            for (char c : input) {
+                size_t p = b64.find(c);
+                if (p == std::string::npos) continue;
+                val = (val << 6) | (int)p; bits += 6;
+                if (bits >= 0) { out += (char)((val >> bits) & 0xFF); bits -= 8; }
+            }
+            return vm.str(out);
+        }, "atob")));
+    vm.setGlobal("btoa", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("btoa") {
+            static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string input = ARG_STR(0), out;
+            int val = 0, bits = 0;
+            for (unsigned char c : input) {
+                val = (val << 8) | c; bits += 8;
+                while (bits >= 6) { bits -= 6; out += b64[(val >> bits) & 0x3F]; }
+            }
+            if (bits > 0) out += b64[(val << (6 - bits)) & 0x3F];
+            while (out.size() % 4) out += '=';
+            return vm.str(out);
+        }, "btoa")));
 
     // window.alert / confirm / prompt
     vm.setGlobal("alert", JsValue::object(vm.gc().newNativeFunction(
