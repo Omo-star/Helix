@@ -51,7 +51,14 @@ struct Updater {
 
         FILE* f = fopen(updatePath.c_str(), "rb");
         if (!f) return;  // no pending update
+        fseek(f, 0, SEEK_END);
+        long updateSize = ftell(f);
         fclose(f);
+        // Sanity: update must be at least 500 KB to be a real binary.
+        if (updateSize < 500 * 1024) {
+            std::remove(updatePath.c_str());
+            return;
+        }
 
 #ifdef _WIN32
         // Windows: rename running exe out of the way, move update in.
@@ -124,24 +131,32 @@ private:
         assetName = "Helix-linux";
 #endif
 
-        // Find "browser_download_url" near assetName.
+        // Find the browser_download_url that contains our asset name.
         std::string downloadUrl;
         {
-            size_t namePos = res.body.find(assetName);
-            if (namePos == std::string::npos) { setStatus(""); return; }
-            // Search backward for "browser_download_url"
-            size_t urlKey = res.body.rfind("\"browser_download_url\"", namePos);
-            if (urlKey == std::string::npos) { setStatus(""); return; }
-            size_t q1 = res.body.find("\"http", urlKey + 22);
-            size_t q2 = res.body.find('"', q1 + 1);
-            if (q1 == std::string::npos || q2 == std::string::npos) { setStatus(""); return; }
-            downloadUrl = res.body.substr(q1 + 1, q2 - q1 - 1);
+            std::string needle = "\"browser_download_url\"";
+            size_t pos = 0;
+            while (pos < res.body.size()) {
+                size_t urlKey = res.body.find(needle, pos);
+                if (urlKey == std::string::npos) break;
+                size_t q1 = res.body.find('"', urlKey + needle.size());
+                size_t q2 = (q1 != std::string::npos) ? res.body.find('"', q1 + 1) : std::string::npos;
+                if (q1 != std::string::npos && q2 != std::string::npos) {
+                    std::string url = res.body.substr(q1 + 1, q2 - q1 - 1);
+                    if (url.find(assetName) != std::string::npos) {
+                        downloadUrl = url;
+                        break;
+                    }
+                }
+                pos = urlKey + needle.size();
+            }
+            if (downloadUrl.empty()) { setStatus(""); return; }
         }
 
         setStatus("Downloading Helix " + tag + "...");
 
         auto dlRes = FetchUrl(downloadUrl);
-        if (!dlRes.success || dlRes.body.size() < 1024) {
+        if (!dlRes.success || dlRes.body.size() < 500 * 1024) {
             setStatus("Update download failed.");
             return;
         }
