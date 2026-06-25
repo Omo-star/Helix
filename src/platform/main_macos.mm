@@ -11,6 +11,7 @@
 #include "platform/box_painter.h"
 #include "platform/plat_text_measure.h"
 #include "platform/form_state.h"
+#include "platform/updater.h"
 #include "layout/layout_engine.h"
 #include "css/stylesheet.h"
 
@@ -37,6 +38,7 @@ static std::unique_ptr<LayoutBox> g_layoutRoot;
 static std::map<std::string, PlatBitmap> g_images;
 static std::map<std::string, PlatFont> g_fontCache;
 static FormState g_formState;
+static Updater g_updater;
 
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
 
@@ -262,6 +264,17 @@ int main(int argc, const char* argv[]) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+        // Auto-update.
+        {
+            std::string exePath = [[[NSBundle mainBundle] executablePath] UTF8String];
+            Updater::applyPendingUpdate(exePath);
+            g_updater.onStatusChanged = []() {
+                if (g_statusField)
+                    [g_statusField setStringValue:[NSString stringWithUTF8String:g_updater.statusMessage.c_str()]];
+            };
+            g_updater.checkForUpdateAsync(exePath);
+        }
 
         // Create main menu (required for Cmd+Q to work)
         NSMenu* menubar = [[NSMenu alloc] init];

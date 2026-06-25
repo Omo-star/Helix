@@ -10,6 +10,7 @@
 #include "layout/scroll.h"
 #include "render/renderer.h"
 #include "platform/form_state.h"
+#include "platform/updater.h"
 #include "js/engine.h"
 
 #include <string>
@@ -92,6 +93,7 @@ static HWND     g_hwndFind;
 static bool     g_findVisible = false;
 static Renderer g_renderer;
 static FormState g_formState;
+static Updater g_updater;
 static JsEngine g_js;
 
 static std::vector<Tab> g_tabs;
@@ -138,7 +140,11 @@ static void SetUrlBarForTab(const Tab& tab) {
     SetUrlBar(tab.displayUrl.empty() ? tab.url : tab.displayUrl);
 }
 static void SetStatus(const std::string& s) {
-    SetWindowTextW(g_hwndStatus, ToWide(s).c_str());
+    // Show updater status when not hovering a link.
+    if (s.empty() && !g_updater.statusMessage.empty())
+        SetWindowTextW(g_hwndStatus, ToWide(g_updater.statusMessage).c_str());
+    else
+        SetWindowTextW(g_hwndStatus, ToWide(s).c_str());
 }
 static void UpdateTitle() {
     std::wstring t = ToWide(CurTab().title);
@@ -960,6 +966,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    // Auto-update: apply a previously downloaded update, then check for new ones.
+    char exeBuf[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exeBuf, MAX_PATH);
+    std::string exePath(exeBuf);
+    Updater::applyPendingUpdate(exePath);
+    g_updater.onStatusChanged = []() { if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE); };
+    g_updater.checkForUpdateAsync(exePath);
 
     WNDCLASSEXW wc   = { sizeof(wc) };
     wc.lpfnWndProc   = WndProc;

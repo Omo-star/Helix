@@ -10,6 +10,7 @@
 #include "platform/browser_core.h"
 #include "platform/box_painter.h"
 #include "platform/plat_text_measure.h"
+#include "platform/updater.h"
 #include "third_party/stb_image.h"
 #include <set>
 #include "layout/layout_engine.h"
@@ -35,6 +36,7 @@ static std::set<std::string> g_loadingImages;
 static std::set<std::string> g_failedImages;
 static std::map<std::string, PlatFont> g_fontCache;
 static FormState g_formState;
+static Updater g_updater;
 
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
 
@@ -361,6 +363,20 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
 
 int main(int argc, char* argv[]) {
     gtk_init(&argc, &argv);
+
+    // Auto-update: apply staged update, then check for new one in background.
+    {
+        std::string exePath = "/proc/self/exe";
+        char buf[4096] = {};
+        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (len > 0) { buf[len] = 0; exePath = buf; }
+        Updater::applyPendingUpdate(exePath);
+        g_updater.onStatusChanged = []() {
+            if (g_statusLabel)
+                gtk_label_set_text(GTK_LABEL(g_statusLabel), g_updater.statusMessage.c_str());
+        };
+        g_updater.checkForUpdateAsync(exePath);
+    }
 
     // Window
     g_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
