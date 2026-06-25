@@ -29,9 +29,10 @@ struct JsEngine::Impl {
 JsEngine::JsEngine() : m_impl(std::make_unique<Impl>()) {}
 JsEngine::~JsEngine() = default;
 
-void JsEngine::setDocument(std::shared_ptr<Node> doc, std::function<void()> onRepaint) {
+void JsEngine::setDocument(std::shared_ptr<Node> doc, std::function<void()> onRepaint,
+                           const std::string& pageUrl) {
     m_impl = std::make_unique<Impl>();
-    registerDom(m_impl->vm, std::move(doc), std::move(onRepaint));
+    registerDom(m_impl->vm, std::move(doc), std::move(onRepaint), pageUrl);
 }
 
 bool JsEngine::runScript(const std::string& source, const std::string& filename) {

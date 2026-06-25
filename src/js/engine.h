@@ -12,7 +12,8 @@ public:
     ~JsEngine();
 
     // Attach a DOM document so JS can access document/window.
-    void setDocument(std::shared_ptr<Node> doc, std::function<void()> onRepaint);
+    void setDocument(std::shared_ptr<Node> doc, std::function<void()> onRepaint,
+                     const std::string& pageUrl = "");
 
     // Execute a JS source string (parses, compiles, runs).
     // Returns false and logs on parse/runtime error.
