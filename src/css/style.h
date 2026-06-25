@@ -116,6 +116,10 @@ struct ComputedStyle {
     bool     rightSet     = false;
     bool     bottomSet    = false;
     bool     leftSet      = false;
+    bool     topPercent   = false;
+    bool     rightPercent = false;
+    bool     bottomPercent= false;
+    bool     leftPercent  = false;
     // Visibility
     bool     visibilityHidden = false;
     float    opacity          = 1.f;
@@ -266,10 +270,10 @@ struct ComputedStyle {
         if (child.positionMode != 0) out.positionMode = child.positionMode;
         if (child.zIndexSet) { out.zIndex = child.zIndex; out.zIndexSet = true; }
         if (child.overflowSet)  { out.overflowHidden = child.overflowHidden; out.overflowSet = true; out.overflowMode = child.overflowMode; }
-        if (child.topSet)    { out.top    = child.top;    out.topSet    = true; }
-        if (child.rightSet)  { out.right  = child.right;  out.rightSet  = true; }
-        if (child.bottomSet) { out.bottom = child.bottom; out.bottomSet = true; }
-        if (child.leftSet)   { out.left   = child.left;   out.leftSet   = true; }
+        if (child.topSet)    { out.top    = child.top;    out.topSet    = true; out.topPercent    = child.topPercent; }
+        if (child.rightSet)  { out.right  = child.right;  out.rightSet  = true; out.rightPercent  = child.rightPercent; }
+        if (child.bottomSet) { out.bottom = child.bottom; out.bottomSet = true; out.bottomPercent = child.bottomPercent; }
+        if (child.leftSet)   { out.left   = child.left;   out.leftSet   = true; out.leftPercent   = child.leftPercent; }
         if (child.visibilitySet) { out.visibilityHidden = child.visibilityHidden; out.visibilitySet = true; }
         if (child.opacitySet) { out.opacity = child.opacity; out.opacitySet = true; }
         if (child.objectFit != 0) out.objectFit = child.objectFit;

@@ -1162,21 +1162,33 @@ static void ApplyDeclaration(const std::string& prop,
         else if (v == "scroll") { out.overflowHidden = true;  out.overflowMode = 3; }
         else                    { out.overflowHidden = false; out.overflowMode = 0; }
     } else if (prop == "top") {
-        std::string v = sLower(sTrim(val));
-        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
-            { out.top = ParseLength(val); out.topSet = true; }
+        std::string v = sTrim(val);
+        if (sLower(v) != "auto" && sLower(v) != "inherit" && sLower(v) != "initial" && sLower(v) != "unset") {
+            out.topSet = true;
+            if (!v.empty() && v.back() == '%') { out.top = ParseLength(v); out.topPercent = true; }
+            else { out.top = ParseLength(v); out.topPercent = false; }
+        }
     } else if (prop == "right") {
-        std::string v = sLower(sTrim(val));
-        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
-            { out.right = ParseLength(val); out.rightSet = true; }
+        std::string v = sTrim(val);
+        if (sLower(v) != "auto" && sLower(v) != "inherit" && sLower(v) != "initial" && sLower(v) != "unset") {
+            out.rightSet = true;
+            if (!v.empty() && v.back() == '%') { out.right = ParseLength(v); out.rightPercent = true; }
+            else { out.right = ParseLength(v); out.rightPercent = false; }
+        }
     } else if (prop == "bottom") {
-        std::string v = sLower(sTrim(val));
-        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
-            { out.bottom = ParseLength(val); out.bottomSet = true; }
+        std::string v = sTrim(val);
+        if (sLower(v) != "auto" && sLower(v) != "inherit" && sLower(v) != "initial" && sLower(v) != "unset") {
+            out.bottomSet = true;
+            if (!v.empty() && v.back() == '%') { out.bottom = ParseLength(v); out.bottomPercent = true; }
+            else { out.bottom = ParseLength(v); out.bottomPercent = false; }
+        }
     } else if (prop == "left") {
-        std::string v = sLower(sTrim(val));
-        if (v != "auto" && v != "inherit" && v != "initial" && v != "unset")
-            { out.left = ParseLength(val); out.leftSet = true; }
+        std::string v = sTrim(val);
+        if (sLower(v) != "auto" && sLower(v) != "inherit" && sLower(v) != "initial" && sLower(v) != "unset") {
+            out.leftSet = true;
+            if (!v.empty() && v.back() == '%') { out.left = ParseLength(v); out.leftPercent = true; }
+            else { out.left = ParseLength(v); out.leftPercent = false; }
+        }
     } else if (prop == "opacity") {
         try { out.opacity = std::stof(sTrim(val)); out.opacitySet = true; } catch (...) {}
     } else if (prop == "visibility") {

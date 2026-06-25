@@ -1555,8 +1555,11 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
         // Resolve width.
         float w = usedWidth(s, cbW);
         if (w < 0) {
-            if (s.leftSet && s.rightSet)
-                w = std::max(0.f, cbW - px(s.left) - px(s.right) - b->marginLeft - b->marginRight - bpX);
+            if (s.leftSet && s.rightSet) {
+                float l = s.leftPercent ? cbW*(s.left/100.f) : px(s.left);
+                float r = s.rightPercent ? cbW*(s.right/100.f) : px(s.right);
+                w = std::max(0.f, cbW - l - r - b->marginLeft - b->marginRight - bpX);
+            }
             else
                 w = std::min(maxContent(*b), std::max(0.f, cbW - bpX));  // shrink-to-fit
         }
@@ -1596,13 +1599,15 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
             if (s.minHeight >= 0) b->contentH = std::max(b->contentH, px(s.minHeight));
         }
 
-        // Final border-box position.
+        // Final border-box position. Percentages resolve against the CB dimensions.
+        auto resolveH = [&](float v, bool isPct) { return isPct ? cbW * (v / 100.f) : px(v); };
+        auto resolveV = [&](float v, bool isPct) { return isPct ? cbH * (v / 100.f) : px(v); };
         float bx, by;
-        if (s.leftSet)       bx = cbX + px(s.left) + b->marginLeft;
-        else if (s.rightSet) bx = cbX + cbW - px(s.right) - b->borderBoxW() - b->marginRight;
+        if (s.leftSet)       bx = cbX + resolveH(s.left, s.leftPercent) + b->marginLeft;
+        else if (s.rightSet) bx = cbX + cbW - resolveH(s.right, s.rightPercent) - b->borderBoxW() - b->marginRight;
         else                 bx = cbX;  // static-ish fallback
-        if (s.topSet)        by = cbY + px(s.top) + b->marginTop;
-        else if (s.bottomSet)by = cbY + cbH - px(s.bottom) - b->borderBoxH() - b->marginBottom;
+        if (s.topSet)        by = cbY + resolveV(s.top, s.topPercent) + b->marginTop;
+        else if (s.bottomSet)by = cbY + cbH - resolveV(s.bottom, s.bottomPercent) - b->borderBoxH() - b->marginBottom;
         else                 by = cbY;
 
         float dx = bx - b->x, dy = by - b->y;
