@@ -21,6 +21,26 @@ static const std::set<std::string> kClosesParagraph = {
     "main","nav","ol","p","pre","section","table","ul"
 };
 
+// Elements that also close specific ancestors (not just self).
+// <td>/<th> close an open <td>/<th>; <tr> closes <td>/<th> AND <tr>.
+static bool implicitlyCloses(const std::string& newTag, const std::string& openTag) {
+    if (newTag == "td" || newTag == "th")
+        return openTag == "td" || openTag == "th";
+    if (newTag == "tr")
+        return openTag == "td" || openTag == "th" || openTag == "tr";
+    if (newTag == "thead" || newTag == "tbody" || newTag == "tfoot")
+        return openTag == "td" || openTag == "th" || openTag == "tr"
+            || openTag == "thead" || openTag == "tbody" || openTag == "tfoot";
+    if (newTag == "li") return openTag == "li";
+    if (newTag == "dt" || newTag == "dd") return openTag == "dt" || openTag == "dd";
+    if (newTag == "option") return openTag == "option";
+    if (newTag == "optgroup") return openTag == "option" || openTag == "optgroup";
+    return false;
+}
+
+// Foreign content tags: their raw content is passed through as a single text node.
+static const std::set<std::string> kForeignTags = { "svg", "math" };
+
 std::shared_ptr<Node> ParseHtml(const std::string& html) {
     auto doc = Node::makeDocument();
 
@@ -36,23 +56,23 @@ std::shared_ptr<Node> ParseHtml(const std::string& html) {
 
         case TokenType::StartTag: {
             // HTML permits omitted </p> before many block/table starts.
-            // Acid2 relies on <table> closing <p> before the face markup.
             if (kClosesParagraph.count(t.name) && stack.size() > 1) {
-                if (stack.back()->tagName == "p") {
+                if (stack.back()->tagName == "p")
                     stack.pop_back();
-                }
             }
 
-            // Auto-close peer elements (e.g. <p> closes previous <p>)
-            if (kAutoClose.count(t.name) && stack.size() > 1) {
-                if (stack.back()->tagName == t.name) {
-                    stack.pop_back();
-                }
-            }
+            // Implicit closing: pop open elements that the new tag closes.
+            // E.g. <td> closes a previous open <td>/<th>, <tr> closes <td>/<th>/<tr>.
+            while (stack.size() > 1 && implicitlyCloses(t.name, stack.back()->tagName))
+                stack.pop_back();
 
             auto node = Node::makeElement(t.name);
             node->attrs = t.attrs;
             current()->appendChild(node);
+
+            // <template>: parsed into the DOM but its children are inert
+            // (display:none is applied by the layout engine via UA defaults).
+            // We still push it on the stack so children attach to it.
 
             if (!kVoidTags.count(t.name) && !t.selfClosing)
                 stack.push_back(node);

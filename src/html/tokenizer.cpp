@@ -50,7 +50,49 @@ static const std::map<std::string, unsigned long>& namedEntities() {
         {"permil", 0x2030}, {"prime", 0x2032}, {"Prime", 0x2033},
         {"infin", 0x221E}, {"ne", 0x2260}, {"le", 0x2264}, {"ge", 0x2265},
         {"micro", 0x00B5}, {"sbquo", 0x201A}, {"bdquo", 0x201E},
-        {"check", 0x2713}, {"cross", 0x2717}, {"star", 0x2605}, {"starf", 0x2605}
+        {"check", 0x2713}, {"cross", 0x2717}, {"star", 0x2605}, {"starf", 0x2605},
+        // Latin accented letters (very common in European content)
+        {"agrave", 0xE0}, {"aacute", 0xE1}, {"acirc", 0xE2}, {"atilde", 0xE3}, {"auml", 0xE4}, {"aring", 0xE5},
+        {"ccedil", 0xE7}, {"egrave", 0xE8}, {"eacute", 0xE9}, {"ecirc", 0xEA}, {"euml", 0xEB},
+        {"igrave", 0xEC}, {"iacute", 0xED}, {"icirc", 0xEE}, {"iuml", 0xEF},
+        {"ntilde", 0xF1}, {"ograve", 0xF2}, {"oacute", 0xF3}, {"ocirc", 0xF4}, {"otilde", 0xF5}, {"ouml", 0xF6},
+        {"ugrave", 0xF9}, {"uacute", 0xFA}, {"ucirc", 0xFB}, {"uuml", 0xFC}, {"szlig", 0xDF},
+        {"Agrave", 0xC0}, {"Aacute", 0xC1}, {"Acirc", 0xC2}, {"Atilde", 0xC3}, {"Auml", 0xC4}, {"Aring", 0xC5},
+        {"Ccedil", 0xC7}, {"Egrave", 0xC8}, {"Eacute", 0xC9}, {"Ecirc", 0xCA}, {"Euml", 0xCB},
+        {"Igrave", 0xCC}, {"Iacute", 0xCD}, {"Icirc", 0xCE}, {"Iuml", 0xCF},
+        {"Ntilde", 0xD1}, {"Ograve", 0xD2}, {"Oacute", 0xD3}, {"Ocirc", 0xD4}, {"Otilde", 0xD5}, {"Ouml", 0xD6},
+        {"Ugrave", 0xD9}, {"Uacute", 0xDA}, {"Ucirc", 0xDB}, {"Uuml", 0xDC},
+        {"eth", 0xF0}, {"ETH", 0xD0}, {"thorn", 0xFE}, {"THORN", 0xDE}, {"yuml", 0xFF},
+        // Greek letters (Wikipedia math articles)
+        {"Alpha", 0x391}, {"Beta", 0x392}, {"Gamma", 0x393}, {"Delta", 0x394}, {"Epsilon", 0x395},
+        {"Zeta", 0x396}, {"Eta", 0x397}, {"Theta", 0x398}, {"Iota", 0x399}, {"Kappa", 0x39A},
+        {"Lambda", 0x39B}, {"Mu", 0x39C}, {"Nu", 0x39D}, {"Xi", 0x39E}, {"Omicron", 0x39F},
+        {"Pi", 0x3A0}, {"Rho", 0x3A1}, {"Sigma", 0x3A3}, {"Tau", 0x3A4}, {"Upsilon", 0x3A5},
+        {"Phi", 0x3A6}, {"Chi", 0x3A7}, {"Psi", 0x3A8}, {"Omega", 0x3A9},
+        {"alpha", 0x3B1}, {"beta", 0x3B2}, {"gamma", 0x3B3}, {"delta", 0x3B4}, {"epsilon", 0x3B5},
+        {"zeta", 0x3B6}, {"eta", 0x3B7}, {"theta", 0x3B8}, {"iota", 0x3B9}, {"kappa", 0x3BA},
+        {"lambda", 0x3BB}, {"mu", 0x3BC}, {"nu", 0x3BD}, {"xi", 0x3BE}, {"omicron", 0x3BF},
+        {"pi", 0x3C0}, {"rho", 0x3C1}, {"sigma", 0x3C3}, {"tau", 0x3C4}, {"upsilon", 0x3C5},
+        {"phi", 0x3C6}, {"chi", 0x3C7}, {"psi", 0x3C8}, {"omega", 0x3C9},
+        // Math/misc symbols
+        {"forall", 0x2200}, {"part", 0x2202}, {"exist", 0x2203}, {"empty", 0x2205},
+        {"nabla", 0x2207}, {"isin", 0x2208}, {"notin", 0x2209}, {"ni", 0x220B},
+        {"prod", 0x220F}, {"sum", 0x2211}, {"minus", 0x2212}, {"lowast", 0x2217},
+        {"radic", 0x221A}, {"prop", 0x221D}, {"ang", 0x2220},
+        {"and", 0x2227}, {"or", 0x2228}, {"cap", 0x2229}, {"cup", 0x222A}, {"int", 0x222B},
+        {"there4", 0x2234}, {"sim", 0x223C}, {"cong", 0x2245}, {"asymp", 0x2248},
+        {"equiv", 0x2261}, {"sub", 0x2282}, {"sup", 0x2283}, {"nsub", 0x2284},
+        {"sube", 0x2286}, {"supe", 0x2287}, {"oplus", 0x2295}, {"otimes", 0x2297},
+        {"perp", 0x22A5}, {"sdot", 0x22C5},
+        // Card suits / misc
+        {"spades", 0x2660}, {"clubs", 0x2663}, {"hearts", 0x2665}, {"diams", 0x2666},
+        {"loz", 0x25CA}, {"crarr", 0x21B5}, {"lceil", 0x2308}, {"rceil", 0x2309},
+        {"lfloor", 0x230A}, {"rfloor", 0x230B}, {"lang", 0x2329}, {"rang", 0x232A},
+        // Spacing/formatting
+        {"zwnj", 0x200C}, {"zwj", 0x200D}, {"lrm", 0x200E}, {"rlm", 0x200F},
+        {"iexcl", 0xA1}, {"iquest", 0xBF}, {"ordf", 0xAA}, {"ordm", 0xBA},
+        {"macr", 0xAF}, {"acute", 0xB4}, {"cedil", 0xB8}, {"uml", 0xA8},
+        {"not", 0xAC}, {"brvbar", 0xA6}, {"curren", 0xA4}
     };
     return entities;
 }
@@ -166,7 +208,7 @@ void HtmlTokenizer::tokenize(const std::string& html, Callback cb) {
     m_pos = 0;
 
     // Tags whose content is raw text until the matching end tag.
-    static const std::set<std::string> rawTags = { "script", "style", "noscript" };
+    static const std::set<std::string> rawTags = { "script", "style", "noscript", "svg", "math" };
 
     while (m_pos < m_src->size()) {
         if ((*m_src)[m_pos] != '<') {
