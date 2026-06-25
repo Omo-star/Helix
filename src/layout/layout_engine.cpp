@@ -496,7 +496,18 @@ std::unique_ptr<LayoutBox> BuildBox(const Node* node, const ComputedStyle& paren
      || box->kind == BoxKind::TableCell || box->kind == BoxKind::InlineBlock) {
         AnonymousFixup(box.get());
     } else if (box->kind == BoxKind::Inline) {
-        box->establishesInline = false; // inline boxes contribute to parent's IFC
+        // If an inline box contains block-level children (e.g. <a> with
+        // <strong display:block> inside), promote it to a block container
+        // so the block children get proper layout.
+        bool hasBlockChild = false;
+        for (auto& k : box->kids)
+            if (!k->isInlineLevel()) { hasBlockChild = true; break; }
+        if (hasBlockChild) {
+            box->kind = BoxKind::Block;
+            AnonymousFixup(box.get());
+        } else {
+            box->establishesInline = false; // inline boxes contribute to parent's IFC
+        }
     } else if (box->kind == BoxKind::Table || box->kind == BoxKind::TableRow) {
         // tables handled structurally during layout
     }
