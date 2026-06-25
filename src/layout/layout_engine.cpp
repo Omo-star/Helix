@@ -99,7 +99,8 @@ bool IsSkippedTag(const std::string& tag) {
     return tag == "head" || tag == "script" || tag == "style" || tag == "meta"
         || tag == "link" || tag == "title" || tag == "noscript" || tag == "base"
         || tag == "template" || tag == "param" || tag == "source" || tag == "track"
-        || tag == "col" || tag == "colgroup";
+        || tag == "col" || tag == "colgroup"
+        || tag == "svg" || tag == "math";
 }
 
 bool TagIsReplacedImage(const Node* n, const std::string& baseUrl, std::string& urlOut) {

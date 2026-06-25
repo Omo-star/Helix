@@ -208,7 +208,7 @@ void HtmlTokenizer::tokenize(const std::string& html, Callback cb) {
     m_pos = 0;
 
     // Tags whose content is raw text until the matching end tag.
-    static const std::set<std::string> rawTags = { "script", "style", "noscript", "svg", "math" };
+    static const std::set<std::string> rawTags = { "script", "style", "noscript" };
 
     while (m_pos < m_src->size()) {
         if ((*m_src)[m_pos] != '<') {
