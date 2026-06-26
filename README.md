@@ -1,11 +1,11 @@
 # Helix
 
-![Release](https://img.shields.io/github/v/release/overcharged-coder/Helix?style=flat-square)
-![Build](https://img.shields.io/github/actions/workflow/status/overcharged-coder/Helix/release.yml?style=flat-square)
+![Release](https://img.shields.io/github/v/release/Omo-star/Helix?style=flat-square)
+![Build](https://img.shields.io/github/actions/workflow/status/Omo-star/Helix/release.yml?style=flat-square)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus&logoColor=white)
 ![Engine](https://img.shields.io/badge/engine-from%20scratch-ff69b4?style=flat-square)
-![Stars](https://img.shields.io/github/stars/overcharged-coder/Helix?style=flat-square)
+![Stars](https://img.shields.io/github/stars/Omo-star/Helix?style=flat-square)
 
 **Helix** is a web browser written from scratch in C++17, with its own HTML parser, DOM,
 CSS engine, JavaScript engine, layout engine, and renderer. No Chromium, no WebView2,
@@ -16,15 +16,30 @@ native shell on each platform.
 
 ## What's built from scratch
 
-- **HTML**: hand-written tokenizer, parser, and DOM
-- **CSS**: cascade with combinators and attribute selectors, custom properties (`var()`),
-  media queries, `calc()` / `clamp()` / `min()` / `max()`, viewport units, `box-sizing`,
-  `object-fit`, flexbox, grid, tables, floats, positioning, `text-align` (incl. justify),
-  `text-indent`, `text-decoration`, and more
-- **JavaScript**: lexer → parser → bytecode compiler → VM, with live DOM bindings
-- **Layout**: block / inline / float / table / flex / grid box-tree engine
-- **Rendering**: per-platform painter over the OS rasterizer
-- Tabs, per-tab history, zoom, find-in-page, async image loading
+- **HTML**: tokenizer with 170+ named entities, tree-construction parser with implicit
+  element creation, auto-close rules, foster parenting, scope-aware end tags, and
+  formatting element adoption (864 lines)
+- **CSS**: 90+ properties, cascade with combinators and attribute selectors, custom
+  properties (`var()`), media queries, `calc()`/`clamp()`/`min()`/`max()`, viewport
+  units, `box-sizing`, `object-fit`, flexbox (wrap/shrink/basis/align-self), grid,
+  tables, floats, positioning with percentage offsets, `text-align` (incl. justify),
+  `text-indent`, `text-decoration`, `vertical-align`, `linear-gradient()`,
+  `box-shadow`, `transform` (translate/scale/rotate), `overflow: auto/scroll`,
+  `:hover`/`:nth-child()`/`:not()`/`~` selectors, and more
+- **JavaScript**: lexer, parser, bytecode compiler, VM with 260+ native functions.
+  Supports classes, destructuring, template literals, `async`/`await`, optional
+  chaining (`?.`), nullish coalescing (`??`), `for...of`, real RegExp via `<regex>`,
+  `fetch()`, `addEventListener` with event bubbling, and external `<script src>` loading
+- **SVG**: basic renderer for rect, circle, ellipse, line, path (cubic/quadratic bezier),
+  polygon with scanline fill
+- **Layout**: block, inline (with line breaking), float, table (auto column sizing),
+  flex (row/column, wrap, shrink, basis, align-self, justify-content, gap), grid
+  (column tracks), positioned (static/relative/absolute/fixed with % offsets)
+- **Rendering**: per-platform painter, DPI-aware, HiDPI scaling
+- **Forms**: interactive `<input>`/`<textarea>` with typing, cursor, and GET submission
+- **Auto-updater**: checks GitHub releases on startup, downloads in background,
+  one-click F12 to apply and restart
+- Tabs, per-tab history, zoom, find-in-page, async image loading (6 concurrent)
 
 ## Dependencies
 
@@ -38,8 +53,8 @@ Only three things are not hand-written:
 
 ## Build
 
-Requires **CMake 3.20+** and a C++17 compiler. libcurl is downloaded automatically
-via CMake if a system copy isn't found.
+Requires **CMake 3.20+** and a C++17 compiler. The version is derived automatically
+from the latest git tag. libcurl is downloaded via CMake if a system copy isn't found.
 
 ### Windows
 Visual Studio build tools with the x64 C++ toolchain.
@@ -73,8 +88,22 @@ cmake --build build
 ## Releases
 
 Prebuilt binaries for all three platforms are published on the
-[Releases page](https://github.com/overcharged-coder/Helix/releases), built by CI on
-every tag.
+[Releases page](https://github.com/Omo-star/Helix/releases), built by CI on
+every tag. Helix auto-updates: on startup it checks for a newer release and
+downloads it in the background. Press **F12** when the status bar shows an
+update is ready to apply it instantly.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| Ctrl+L | Focus address bar |
+| Ctrl+T / Ctrl+W | New / close tab |
+| Ctrl+R / F5 | Reload |
+| Ctrl+F | Find in page |
+| Ctrl++/- | Zoom in/out |
+| Alt+Left/Right | Back / forward |
+| F12 | Apply pending update |
 
 ## Running engine tests
 
