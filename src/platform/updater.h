@@ -40,6 +40,51 @@ struct Updater {
     std::string statusMessage;
     std::function<void()> onStatusChanged;
 
+    // Apply the update and relaunch in one step. Call when the user clicks
+    // "restart to update" or from a menu action. Returns false if no update
+    // is staged or the swap fails.
+    static bool restartToUpdate(const std::string& exePath) {
+        std::string updatePath = pendingPath(exePath);
+        std::string oldPath = exePath + ".old";
+
+        FILE* f = fopen(updatePath.c_str(), "rb");
+        if (!f) return false;
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fclose(f);
+        if (sz < 500 * 1024) { std::remove(updatePath.c_str()); return false; }
+
+        // Clean up any previous .old file.
+        std::remove(oldPath.c_str());
+
+#ifdef _WIN32
+        // Rename running exe → .old (Windows allows renaming a running exe).
+        if (!MoveFileA(exePath.c_str(), oldPath.c_str())) return false;
+        // Move update → original name.
+        if (!MoveFileA(updatePath.c_str(), exePath.c_str())) {
+            MoveFileA(oldPath.c_str(), exePath.c_str()); // rollback
+            return false;
+        }
+        // Launch the new exe and exit.
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi = {};
+        if (CreateProcessA(exePath.c_str(), NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        ExitProcess(0);
+#else
+        std::rename(updatePath.c_str(), exePath.c_str());
+        // Fork and exec the new binary.
+        if (fork() == 0) {
+            execl(exePath.c_str(), exePath.c_str(), nullptr);
+            _exit(1);
+        }
+        _exit(0);
+#endif
+        return true; // unreachable
+    }
+
     // Call on startup BEFORE showing the window. Swaps a staged update binary
     // into place (from a previous session's download).
     static void applyPendingUpdate(const std::string& exePath) {
@@ -176,7 +221,7 @@ private:
 
         updateVersion = tag;
         updateAvailable = true;
-        setStatus("Helix " + tag + " ready — restart to update.");
+        setStatus("Helix " + tag + " ready. Press F12 to update now.");
     }
 
     static std::string pendingPath(const std::string& exePath) {

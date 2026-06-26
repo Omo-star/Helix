@@ -1099,6 +1099,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
                 if (!CurTab().loading) Navigate(CurTab().url, false);
                 handled = true;
             }
+            if (!handled && msg.wParam == VK_F12 && g_updater.updateAvailable) {
+                char exeBuf[MAX_PATH] = {};
+                GetModuleFileNameA(nullptr, exeBuf, MAX_PATH);
+                Updater::restartToUpdate(exeBuf);
+                handled = true;
+            }
             if (!handled && alt) {
                 if (msg.wParam == VK_LEFT)  { GoBack();    handled = true; }
                 if (msg.wParam == VK_RIGHT) { GoForward(); handled = true; }
