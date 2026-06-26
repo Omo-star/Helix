@@ -224,6 +224,55 @@ inline Node* FindFirstElement(Node* root, const std::string& tag) {
     return nullptr;
 }
 
+// Resolve @import url(...) inside a CSS string and return the combined CSS.
+inline std::string ResolveImports(const std::string& css, const std::string& baseUrl,
+                                   int& loaded, size_t& loadedBytes, int depth = 0) {
+    if (depth > 3) return css;  // prevent infinite @import chains
+    std::string result;
+    size_t pos = 0;
+    while (pos < css.size()) {
+        // Look for @import
+        size_t importAt = css.find("@import", pos);
+        if (importAt == std::string::npos) { result += css.substr(pos); break; }
+        result += css.substr(pos, importAt - pos);
+        size_t urlStart = css.find_first_of("\"'(", importAt + 7);
+        if (urlStart == std::string::npos) { result += css.substr(importAt); break; }
+        std::string importUrl;
+        size_t urlEnd;
+        if (css[urlStart] == '(') {
+            urlEnd = css.find(')', urlStart + 1);
+            if (urlEnd == std::string::npos) { result += css.substr(importAt); break; }
+            importUrl = css.substr(urlStart + 1, urlEnd - urlStart - 1);
+            urlEnd = css.find(';', urlEnd);
+        } else {
+            char q = css[urlStart];
+            urlEnd = css.find(q, urlStart + 1);
+            if (urlEnd == std::string::npos) { result += css.substr(importAt); break; }
+            importUrl = css.substr(urlStart + 1, urlEnd - urlStart - 1);
+            urlEnd = css.find(';', urlEnd);
+        }
+        // Strip url() wrapper and quotes
+        if (importUrl.rfind("url(", 0) == 0) importUrl = importUrl.substr(4);
+        while (!importUrl.empty() && (importUrl.back() == ')' || importUrl.back() == '"' || importUrl.back() == '\''))
+            importUrl.pop_back();
+        while (!importUrl.empty() && (importUrl.front() == '"' || importUrl.front() == '\''))
+            importUrl.erase(importUrl.begin());
+        // Fetch the imported stylesheet.
+        if (!importUrl.empty() && loaded < 64 && loadedBytes < 4 * 1024 * 1024) {
+            std::string resolved = ResolveUrlAgainstBase(importUrl, baseUrl);
+            auto res = FetchUrl(resolved, 1024 * 1024);
+            if (res.success && !res.body.empty()) {
+                std::string importedCss = DecodeTextToUtf8(res.body, res.contentType);
+                loadedBytes += importedCss.size();
+                ++loaded;
+                result += ResolveImports(importedCss, resolved, loaded, loadedBytes, depth + 1);
+            }
+        }
+        pos = (urlEnd != std::string::npos) ? urlEnd + 1 : css.size();
+    }
+    return result;
+}
+
 inline void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std::string& pageUrl) {
     if (!dom) return;
     Node* attach = FindFirstElement(dom.get(), "head");
@@ -231,19 +280,22 @@ inline void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std:
     std::vector<Node*> stack{ dom.get() };
     int loaded = 0;
     size_t loadedBytes = 0;
-    while (!stack.empty() && loaded < 8 && loadedBytes < 512 * 1024) {
+    while (!stack.empty() && loaded < 64 && loadedBytes < 4 * 1024 * 1024) {
         Node* n = stack.back();
         stack.pop_back();
         if (n->type == NodeType::Element && n->tagName == "link"
             && AttrContainsToken(n->attr("rel"), "stylesheet")
             && StylesheetMediaApplies(n->attr("media"))) {
             std::string href = ResolveUrlAgainstBase(n->attr("href"), pageUrl);
-            auto res = FetchUrl(href);
+            auto res = FetchUrl(href, 1024 * 1024);
             if (res.success && !res.body.empty()) {
-                loadedBytes += res.body.size();
-                if (loadedBytes <= 512 * 1024) {
+                std::string css = DecodeTextToUtf8(res.body, res.contentType);
+                loadedBytes += css.size();
+                if (loadedBytes <= 4 * 1024 * 1024) {
+                    // Resolve @import directives inside this stylesheet.
+                    css = ResolveImports(css, href, loaded, loadedBytes);
                     auto style = Node::makeElement("style");
-                    style->appendChild(Node::makeText(DecodeTextToUtf8(res.body, res.contentType)));
+                    style->appendChild(Node::makeText(css));
                     attach->appendChild(style);
                     ++loaded;
                 }

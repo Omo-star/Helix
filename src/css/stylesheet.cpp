@@ -10,6 +10,8 @@
 // this after each selector: a declaration on one element never changes the
 // inherited font size of unrelated selectors.
 static float g_emBase = 16.f;
+static const Node* g_hoverNodeCss = nullptr;
+void SetCssHoverNode(const Node* node) { g_hoverNodeCss = node; }
 
 // Viewport dimensions for vw/vh/vmin/vmax units. Set by the layout engine
 // before style resolution so CSS lengths resolve against the real window.
@@ -1359,8 +1361,18 @@ static bool MatchesPseudoClass(const std::string& pseudo, const Node* node) {
         int fromEnd = ElementChildCount(node) - ElementChildIndex(node) + 1;
         return MatchesNth(fromEnd, a, b);
     }
-    // :hover/:focus/:active — always false (no input state tracking yet).
-    if (pseudo == "hover" || pseudo == "focus" || pseudo == "active"
+    // :hover — check if the node or any ancestor is the hovered element.
+    if (pseudo == "hover") {
+        if (!g_hoverNodeCss || !node) return false;
+        const Node* cur = g_hoverNodeCss;
+        while (cur) {
+            if (cur == node) return true;
+            cur = cur->parent;
+        }
+        return false;
+    }
+    // :focus/:active/:visited/:checked/:disabled/:enabled — stubs.
+    if (pseudo == "focus" || pseudo == "active"
         || pseudo == "visited" || pseudo == "checked" || pseudo == "disabled"
         || pseudo == "enabled") return false;
     return false;

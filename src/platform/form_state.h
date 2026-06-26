@@ -116,6 +116,23 @@ struct FormState {
     }
 
     // Walk a layout tree and find the input/textarea Node at (x,y) document coords.
+    // Walk a layout tree and find the deepest Node at (x,y) document coords.
+    static const Node* hitTestNode(const LayoutBox& root, float x, float y, float scrollY, float topInset) {
+        float docY = y + scrollY - topInset;
+        const Node* found = nullptr;
+        std::function<void(const LayoutBox&)> walk = [&](const LayoutBox& box) {
+            if (box.node && box.node->type == NodeType::Element) {
+                float bx = box.x, by = box.y;
+                float bw = box.borderBoxW(), bh = box.borderBoxH();
+                if (x >= bx && x <= bx + bw && docY >= by && docY <= by + bh)
+                    found = box.node;  // deeper nodes override shallower ones
+            }
+            for (auto& k : box.kids) walk(*k);
+        };
+        walk(root);
+        return found;
+    }
+
     static Node* hitTestInput(const LayoutBox& root, float x, float y, float scrollY, float topInset) {
         // Adjust y from screen to document coords.
         float docY = y + scrollY - topInset;

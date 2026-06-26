@@ -58,6 +58,7 @@ public:
     void  SetZoom(float z);
     float GetZoom() const { return m_zoom; }
     const LayoutBox* GetLayoutRoot() const { return m_layoutRoot.get(); }
+    void InvalidateLayout() { m_layoutRoot.reset(); m_layoutDocKey = nullptr; }
 
     void SetSearchQuery(const std::wstring& q) { m_searchQuery = q; }
     const std::wstring& GetSearchQuery() const { return m_searchQuery; }
@@ -132,7 +133,6 @@ private:
     const Node* m_layoutDocKey  = nullptr;
     UINT  m_layoutWKey = 0, m_layoutHKey = 0;
     float m_layoutZoomKey = 0.f;
-    void InvalidateLayout() { m_layoutRoot.reset(); m_layoutDocKey = nullptr; }
 
     ID2D1SolidColorBrush* TempBrush(D2D1_COLOR_F color);
     std::string  ResolveUrl(const std::string& href, const std::string& base);

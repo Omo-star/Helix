@@ -8,6 +8,8 @@
 #include "html/parser.h"
 #include "html/resources.h"
 #include "network/text_decode.h"
+// browser_core.h not included here — main.cpp has its own Tab/Page/Semaphore types.
+// LoadExternalStylesheets is duplicated locally with Windows-specific behavior.
 #include "layout/scroll.h"
 #include "render/renderer.h"
 #include "platform/form_state.h"
@@ -96,6 +98,7 @@ static bool     g_findVisible = false;
 static Renderer g_renderer;
 static FormState g_formState;
 static Updater g_updater;
+const Node* g_hoverNode = nullptr;
 std::map<const Node*, float> g_elementScrollY;
 static std::vector<ScrollableRegion> g_scrollables;
 static JsEngine g_js;
@@ -133,10 +136,6 @@ static std::string ToUtf8(const std::wstring& w) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
     return s;
 }
-static std::string LowerAscii(std::string s) {
-    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
-    return s;
-}
 static void SetUrlBar(const std::string& url) {
     SetWindowTextW(g_hwndUrl, ToWide(url).c_str());
 }
@@ -156,6 +155,10 @@ static void UpdateTitle() {
     SetWindowTextW(g_hwnd, (t + L" \x2014 Helix").c_str());
 }
 
+static std::string LowerAscii(std::string s) {
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
 static bool AttrContainsToken(const std::string& value, const std::string& token) {
     std::string lower = LowerAscii(value);
     size_t start = 0;
@@ -168,7 +171,6 @@ static bool AttrContainsToken(const std::string& value, const std::string& token
     }
     return false;
 }
-
 static bool StylesheetMediaApplies(const std::string& media) {
     std::string lower = LowerAscii(media);
     if (lower.empty()) return true;
@@ -176,41 +178,33 @@ static bool StylesheetMediaApplies(const std::string& media) {
         || lower.find("screen") != std::string::npos
         || lower.find("projection") != std::string::npos;
 }
-
-static Node* FindFirstElement(Node* root, const std::string& tag) {
-    if (!root) return nullptr;
-    std::vector<Node*> stack{ root };
-    while (!stack.empty()) {
-        Node* n = stack.back();
-        stack.pop_back();
-        if (n->type == NodeType::Element && n->tagName == tag) return n;
-        for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
-            stack.push_back(it->get());
-    }
-    return nullptr;
-}
-
 static void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std::string& pageUrl) {
     if (!dom) return;
-    Node* attach = FindFirstElement(dom.get(), "head");
+    Node* attach = nullptr;
+    std::function<Node*(Node*)> findHead = [&](Node* n) -> Node* {
+        if (n->tagName == "head") return n;
+        for (auto& c : n->children) if (auto* h = findHead(c.get())) return h;
+        return nullptr;
+    };
+    attach = findHead(dom.get());
     if (!attach) attach = dom.get();
-
     std::vector<Node*> stack{ dom.get() };
     int loaded = 0;
     size_t loadedBytes = 0;
-    while (!stack.empty() && loaded < 8 && loadedBytes < 512 * 1024) {
+    while (!stack.empty() && loaded < 64 && loadedBytes < 4 * 1024 * 1024) {
         Node* n = stack.back();
         stack.pop_back();
         if (n->type == NodeType::Element && n->tagName == "link"
             && AttrContainsToken(n->attr("rel"), "stylesheet")
             && StylesheetMediaApplies(n->attr("media"))) {
             std::string href = ResolveUrlAgainstBase(n->attr("href"), pageUrl);
-            auto res = FetchUrl(href);
+            auto res = FetchUrl(href, 1024 * 1024);
             if (res.success && !res.body.empty()) {
-                loadedBytes += res.body.size();
-                if (loadedBytes <= 512 * 1024) {
+                std::string css = DecodeTextToUtf8(res.body, res.contentType);
+                loadedBytes += css.size();
+                if (loadedBytes <= 4 * 1024 * 1024) {
                     auto style = Node::makeElement("style");
-                    style->appendChild(Node::makeText(DecodeTextToUtf8(res.body, res.contentType)));
+                    style->appendChild(Node::makeText(css));
                     attach->appendChild(style);
                     ++loaded;
                 }
@@ -754,11 +748,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         }
 
-        // Run <script> tags in the loaded page
+        // Run <script> tags in the loaded page.
+        // Pass 1: inline scripts and non-defer/async external scripts (blocking).
+        // Pass 2: deferred scripts (after DOM is ready).
         if (idx >= 0 && idx < (int)g_tabs.size() && g_tabs[idx].page && g_tabs[idx].page->dom) {
             try {
                 auto repaint = [hwnd]() { InvalidateRect(hwnd, NULL, FALSE); };
-                g_js.setDocument(g_tabs[idx].page->dom, repaint);
+                g_js.setDocument(g_tabs[idx].page->dom, repaint, g_tabs[idx].page->url);
+                struct ScriptEntry { std::string source; std::string filename; };
+                std::vector<ScriptEntry> deferred;
                 std::vector<const Node*> stack;
                 stack.push_back(g_tabs[idx].page->dom.get());
                 size_t scriptCount = 0;
@@ -769,14 +767,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (!n) continue;
                     if (n->type == NodeType::Element && n->tagName == "script") {
                         std::string type = n->attr("type");
-                        // Skip module scripts and non-JS types.
                         bool skip = (!type.empty() && type != "text/javascript"
                                      && type != "application/javascript" && type != "module");
+                        bool isDefer = !n->attr("defer").empty() || !n->attr("async").empty();
                         std::string source;
                         std::string srcUrl = n->attr("src");
                         std::string filename = "inline";
                         if (!srcUrl.empty() && !skip) {
-                            // Fetch external script.
                             std::string resolved = ResolveUrlAgainstBase(srcUrl, g_tabs[idx].page->url);
                             auto res = FetchUrl(resolved, 256 * 1024);
                             if (res.success && !res.body.empty()) {
@@ -789,13 +786,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         }
                         totalScriptBytes += source.size();
                         if (!skip && !source.empty() && scriptCount < 128 && totalScriptBytes <= 512 * 1024) {
-                            g_js.runScript(source, filename);
+                            if (isDefer && !srcUrl.empty())
+                                deferred.push_back({ source, filename });
+                            else
+                                g_js.runScript(source, filename);
                         }
                         ++scriptCount;
                     }
                     for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
                         stack.push_back(it->get());
                 }
+                // Run deferred scripts after all inline/blocking scripts.
+                for (auto& ds : deferred)
+                    g_js.runScript(ds.source, ds.filename);
                 // Set up timer for macrotasks / setTimeout
                 SetTimer(hwnd, 1, 16, NULL);
             } catch (...) {
@@ -904,9 +907,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             std::string href = g_renderer.HitTest((float)px, (float)py);
             SetCursor(href.empty() ? g_cursorArrow : g_cursorHand);
             SetStatus(href);
+            // Track :hover node for CSS hover styles.
+            if (g_renderer.GetLayoutRoot()) {
+                const Node* hover = FormState::hitTestNode(*g_renderer.GetLayoutRoot(),
+                    (float)px, (float)py, CurTab().scrollY, (float)TOP_INSET);
+                if (hover != g_hoverNode) {
+                    g_hoverNode = hover;
+                    g_renderer.InvalidateLayout();
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
         } else {
             SetCursor(g_cursorArrow);
             SetStatus({});
+            if (g_hoverNode) {
+                g_hoverNode = nullptr;
+                g_renderer.InvalidateLayout();
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
         }
         return 0;
     }

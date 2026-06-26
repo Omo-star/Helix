@@ -1,5 +1,6 @@
 #include "render/renderer.h"
 #include "layout/layout_engine.h"
+#include "css/stylesheet.h"
 #include "network/url.h"
 #include "third_party/stb_image.h"
 #pragma comment(lib, "d2d1.lib")
@@ -417,6 +418,8 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
             float effZoom = m_zoom * dpiScale;
             // Rebuild the layout tree only when something that affects geometry
             // changed; scrolling reuses the cached tree.
+            extern const Node* g_hoverNode;
+            SetCssHoverNode(g_hoverNode);
             bool reuse = m_layoutRoot
                       && m_layoutDocKey  == doc.get()
                       && m_layoutWKey    == m_width
