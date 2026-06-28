@@ -149,8 +149,7 @@ static Stylesheet CollectCSS(const Node* root) {
                     url = base.substr(0, slash) + url;
                 }
             }
-            [g_urlField setStringValue:[NSString stringWithUTF8String:url.c_str()]];
-            // TODO: trigger navigation
+            g_chrome.navigate(url);
         }
         return;
     }
@@ -196,16 +195,10 @@ static Stylesheet CollectCSS(const Node* root) {
 }
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification {
-    // URL bar enter pressed
     NSTextField* field = [notification object];
     if (field == g_urlField) {
         std::string url = [[field stringValue] UTF8String];
-        if (g_tabs.empty()) return;
-        // TODO: call Navigate() from browser_core
-        Tab& tab = CurTab();
-        tab.url = url;
-        tab.title = "Loading...";
-        tab.loading = true;
+        g_chrome.navigate(url);
         [g_view setNeedsDisplay:YES];
     }
 }
@@ -224,34 +217,22 @@ static Stylesheet CollectCSS(const Node* root) {
 @implementation ToolbarTarget
 
 - (void)goBack:(id)sender {
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    if (tab.histIdx > 0) {
-        tab.histIdx--;
-        tab.url = tab.history[tab.histIdx];
-        // TODO: Navigate to tab.url
-        [g_view setNeedsDisplay:YES];
-    }
+    g_chrome.back();
+    [g_view setNeedsDisplay:YES];
 }
 
 - (void)goForward:(id)sender {
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    if (tab.histIdx + 1 < (int)tab.history.size()) {
-        tab.histIdx++;
-        tab.url = tab.history[tab.histIdx];
-        // TODO: Navigate to tab.url
-        [g_view setNeedsDisplay:YES];
-    }
+    g_chrome.forward();
+    [g_view setNeedsDisplay:YES];
 }
 
 - (void)reload:(id)sender {
-    // TODO: re-navigate current URL
+    g_chrome.reload();
     [g_view setNeedsDisplay:YES];
 }
 
 - (void)goHome:(id)sender {
-    // TODO: Navigate to helix://home
+    g_chrome.home();
     [g_view setNeedsDisplay:YES];
 }
 
@@ -347,11 +328,36 @@ int main(int argc, const char* argv[]) {
         [contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[toolbar(==36)][g_view][g_statusField(==20)]|"
             options:0 metrics:nil views:views]];
 
-        // Initial tab
-        g_tabs.emplace_back();
-        g_tabs[0].page = std::make_shared<Page>();
-        g_tabs[0].page->url = "helix://home";
-        g_tabs[0].page->dom = ParseHtml(HomePageHtml());
+        // Wire chrome callbacks and init.
+        g_chrome.cb.repaint = []() { if (g_view) [g_view setNeedsDisplay:YES]; };
+        g_chrome.cb.setTitle = [](const std::string& t) {
+            if (g_window) [g_window setTitle:[NSString stringWithUTF8String:t.c_str()]];
+        };
+        g_chrome.cb.setAddressText = [](const std::string& u) {
+            if (g_urlField) [g_urlField setStringValue:[NSString stringWithUTF8String:u.c_str()]];
+        };
+        g_chrome.cb.setStatusText = [](const std::string& s) {
+            if (g_statusField) [g_statusField setStringValue:[NSString stringWithUTF8String:s.c_str()]];
+        };
+        g_chrome.onNavigateRequested = [](int tabIdx, const std::string& url) {
+            // macOS platform-owned fetch.
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                auto res = FetchUrl(url);
+                auto* page = new Page();
+                page->url = url;
+                if (res.success && !res.body.empty()) {
+                    page->dom = ParseHtml(DecodeTextToUtf8(res.body, res.contentType, true));
+                    LoadExternalStylesheets(page->dom, page->url);
+                } else {
+                    page->error = res.error;
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    g_chrome.onPageReady(tabIdx, page);
+                    [g_view setNeedsDisplay:YES];
+                });
+            });
+        };
+        g_chrome.init();
 
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];

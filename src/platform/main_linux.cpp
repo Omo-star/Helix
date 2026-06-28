@@ -194,117 +194,65 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
 
 // ── URL bar ──────────────────────────────────────────────────────────────────
 
-static void on_url_activate(GtkEntry* entry, gpointer data) {
-    (void)data;
-    const gchar* text = gtk_entry_get_text(entry);
-    if (!text || g_tabs.empty()) return;
-    std::string url(text);
-    Tab& tab = CurTab();
-
-    if (url == "helix://home") {
-        tab.page = std::make_shared<Page>();
-        tab.page->url = url;
-        tab.page->dom = ParseHtml(HomePageHtml());
-        tab.title = "Helix";
-        tab.url = url;
-        tab.scrollY = 0;
-        gtk_widget_queue_draw(g_drawingArea);
-        return;
-    }
-
-    if (LooksLikeUrl(url)) {
-        if (url.find("://") == std::string::npos) url = "https://" + url;
-    } else {
-        url = "https://www.bing.com/search?q=" + UrlEncodeQuery(url);
-    }
-
-    tab.url = url;
-    tab.title = "Loading...";
-    tab.loading = true;
-    tab.scrollY = 0;
-    gtk_widget_queue_draw(g_drawingArea);
-
-    // Fetch in background thread, update on main thread via g_idle_add
-    std::string fetchUrl = url;
-    std::thread([fetchUrl]() {
-        auto res = FetchUrl(fetchUrl);
+// Platform-owned fetch: called by g_chrome.onNavigateRequested.
+static void platformFetch(int tabIdx, const std::string& url) {
+    std::thread([tabIdx, url]() {
+        auto res = FetchUrl(url);
         auto* page = new Page();
-        page->url = fetchUrl;
+        page->url = url;
         if (res.success && !res.body.empty()) {
-            page->dom = ParseHtml(res.body);
+            page->dom = ParseHtml(DecodeTextToUtf8(res.body, res.contentType, true));
             LoadExternalStylesheets(page->dom, page->url);
         } else {
             page->error = res.error;
         }
+        // Post result back to GTK main thread with the correct tab index.
+        struct Msg { int idx; Page* p; };
+        auto* msg = new Msg{tabIdx, page};
         g_idle_add([](gpointer data) -> gboolean {
-            auto* p = static_cast<Page*>(data);
-            if (!g_tabs.empty()) {
-                Tab& tab = CurTab();
-                tab.page = std::shared_ptr<Page>(p);
-                tab.loading = false;
-                tab.title = "Page";
-                // Extract title from DOM
-                if (tab.page->dom) {
-                    std::function<std::string(const Node*)> findTitle = [&](const Node* n) -> std::string {
-                        if (n->tagName == "title") {
-                            for (auto& c : n->children) if (c->type == NodeType::Text) return c->text;
-                        }
-                        for (auto& c : n->children) { auto t = findTitle(c.get()); if (!t.empty()) return t; }
-                        return "";
-                    };
-                    std::string t = findTitle(tab.page->dom.get());
-                    if (!t.empty()) tab.title = t;
-                }
-                gtk_window_set_title(GTK_WINDOW(g_window), tab.title.c_str());
-                gtk_widget_queue_draw(g_drawingArea);
-            } else {
-                delete p;
-            }
+            auto* m = static_cast<Msg*>(data);
+            g_chrome.onPageReady(m->idx, m->p);
+            gtk_window_set_title(GTK_WINDOW(g_window), g_chrome.state.title().c_str());
+            gtk_widget_queue_draw(g_drawingArea);
+            delete m;
             return G_SOURCE_REMOVE;
-        }, page);
+        }, msg);
     }).detach();
+}
+
+static void on_url_activate(GtkEntry* entry, gpointer data) {
+    (void)data;
+    const gchar* text = gtk_entry_get_text(entry);
+    if (!text || g_tabs.empty()) return;
+    g_chrome.navigate(std::string(text));
+    gtk_widget_queue_draw(g_drawingArea);
 }
 
 // ── toolbar buttons ──────────────────────────────────────────────────────────
 
 static void on_back(GtkWidget* w, gpointer d) {
     (void)w; (void)d;
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    if (tab.histIdx > 0) {
-        tab.histIdx--;
-        tab.url = tab.history[tab.histIdx];
-        gtk_entry_set_text(GTK_ENTRY(g_urlEntry), tab.url.c_str());
-        gtk_widget_queue_draw(g_drawingArea);
-    }
+    g_chrome.back();
+    gtk_entry_set_text(GTK_ENTRY(g_urlEntry), CurTab().url.c_str());
+    gtk_widget_queue_draw(g_drawingArea);
 }
 
 static void on_forward(GtkWidget* w, gpointer d) {
     (void)w; (void)d;
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    if (tab.histIdx + 1 < (int)tab.history.size()) {
-        tab.histIdx++;
-        tab.url = tab.history[tab.histIdx];
-        gtk_entry_set_text(GTK_ENTRY(g_urlEntry), tab.url.c_str());
-        gtk_widget_queue_draw(g_drawingArea);
-    }
+    g_chrome.forward();
+    gtk_entry_set_text(GTK_ENTRY(g_urlEntry), CurTab().url.c_str());
+    gtk_widget_queue_draw(g_drawingArea);
 }
 
 static void on_reload(GtkWidget* w, gpointer d) {
     (void)w; (void)d;
+    g_chrome.reload();
     gtk_widget_queue_draw(g_drawingArea);
 }
 
 static void on_home(GtkWidget* w, gpointer d) {
     (void)w; (void)d;
-    if (g_tabs.empty()) return;
-    Tab& tab = CurTab();
-    tab.url = "helix://home";
-    tab.page = std::make_shared<Page>();
-    tab.page->url = "helix://home";
-    tab.page->dom = ParseHtml(HomePageHtml());
-    tab.title = "Helix";
+    g_chrome.home();
     gtk_entry_set_text(GTK_ENTRY(g_urlEntry), "helix://home");
     gtk_widget_queue_draw(g_drawingArea);
 }
@@ -461,11 +409,13 @@ int main(int argc, char* argv[]) {
     gtk_widget_set_margin_start(g_statusLabel, 8);
     gtk_box_pack_start(GTK_BOX(vbox), g_statusLabel, FALSE, FALSE, 0);
 
-    // Initial tab
-    g_tabs.emplace_back();
-    g_tabs[0].page = std::make_shared<Page>();
-    g_tabs[0].page->url = "helix://home";
-    g_tabs[0].page->dom = ParseHtml(HomePageHtml());
+    // Wire chrome callbacks.
+    g_chrome.cb.repaint = []() { if (g_drawingArea) gtk_widget_queue_draw(g_drawingArea); };
+    g_chrome.cb.setTitle = [](const std::string& t) { if (g_window) gtk_window_set_title(GTK_WINDOW(g_window), t.c_str()); };
+    g_chrome.cb.setAddressText = [](const std::string& u) { if (g_urlEntry) gtk_entry_set_text(GTK_ENTRY(g_urlEntry), u.c_str()); };
+    g_chrome.cb.setStatusText = [](const std::string& s) { if (g_statusLabel) gtk_label_set_text(GTK_LABEL(g_statusLabel), s.c_str()); };
+    g_chrome.onNavigateRequested = platformFetch;
+    g_chrome.init();
 
     gtk_widget_show_all(g_window);
     gtk_window_present(GTK_WINDOW(g_window));
