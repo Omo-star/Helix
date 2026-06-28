@@ -175,6 +175,20 @@ static void ClampScroll() {
     CurTab().scrollY = std::max(0.f, std::min(CurTab().scrollY, maxY));
 }
 
+static RECT ContentPaintRect() {
+    RECT rc{};
+    GetClientRect(g_hwnd, &rc);
+    rc.top = TOP_INSET;
+    rc.bottom = std::max(rc.top, rc.bottom - STATUS_H - (g_findVisible ? FIND_H : 0));
+    return rc;
+}
+
+static void InvalidateContent() {
+    if (!g_hwnd) return;
+    RECT rc = ContentPaintRect();
+    InvalidateRect(g_hwnd, &rc, FALSE);
+}
+
 // Home page HTML comes from HomePageHtml() in browser_core.h.
 
 // ─── title extraction ────────────────────────────────────────────────────────
@@ -737,6 +751,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         BeginPaint(hwnd, &ps);
+        bool repaintChrome = ps.rcPaint.top < TOP_INSET;
 
         auto tabs = BuildTabEntries();
         Tab& cur = CurTab();
@@ -744,7 +759,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (cur.page && cur.page->dom) {
             CurTab().docHeight = g_renderer.Paint(
                 cur.page->dom, cur.scrollY, cur.page->url,
-                (float)TOP_INSET, (float)TAB_H, &tabs);
+                (float)TOP_INSET, (float)TAB_H, &tabs, repaintChrome);
             if (cur.fragmentScrollPending) {
                 cur.fragmentScrollPending = false;
                 float anchorY = 0.f;
@@ -759,12 +774,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         } else {
             g_renderer.Paint(nullptr, 0.f, {},
-                (float)TOP_INSET, (float)TAB_H, &tabs);
+                (float)TOP_INSET, (float)TAB_H, &tabs, repaintChrome);
         }
-        DrawUrlFrame(ps.hdc);
-        if (g_findVisible)
+        if (repaintChrome) {
+            DrawUrlFrame(ps.hdc);
+            DrawLoadingAccent(ps.hdc);
+        }
+        if (g_findVisible && ps.rcPaint.bottom >= ContentPaintRect().bottom)
             DrawEditFrame(ps.hdc, g_hwndFind);
-        DrawLoadingAccent(ps.hdc);
         UpdateScrollbar();
         EndPaint(hwnd, &ps);
         if (repaintForFragment) InvalidateRect(hwnd, NULL, FALSE);
@@ -945,7 +962,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ClampScroll();
             UpdateScrollbar();
         }
-        InvalidateRect(hwnd, NULL, FALSE);
+        InvalidateContent();
         return 0;
     }
 

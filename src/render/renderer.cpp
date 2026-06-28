@@ -465,7 +465,8 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                       const std::string& baseUrl,
                       float topInset,
                       float tabStripH,
-                      const std::vector<TabEntry>* tabs)
+                      const std::vector<TabEntry>* tabs,
+                      bool repaintChrome)
 {
     if (!EnsureTarget()) return 0.f;
 
@@ -490,10 +491,14 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
     D2D1_COLOR_F bgF = (pageBg.valid && pageBg.a > 0.001f)
         ? ToD2D(pageBg)
         : D2D1::ColorF(1.f, 1.f, 1.f);
-    m_rt->Clear(bgF);
+    if (repaintChrome) {
+        m_rt->Clear(bgF);
+    } else {
+        m_rt->FillRectangle(D2D1::RectF(0, topInset, (float)m_width, (float)m_height), TempBrush(bgF));
+    }
 
     // Chrome area (toolbar + tab strip)
-    if (topInset > 0) {
+    if (repaintChrome && topInset > 0) {
         m_rt->FillRectangle(D2D1::RectF(0, 0, (float)m_width, topInset), m_bgBrush);
         if (tabStripH > 0) {
             m_rt->FillRectangle(D2D1::RectF(0, 0, (float)m_width, tabStripH), m_tabBgBrush);
@@ -501,7 +506,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         }
     }
 
-    if (tabs && !tabs->empty() && tabStripH > 0)
+    if (repaintChrome && tabs && !tabs->empty() && tabStripH > 0)
         DrawTabStrip(*tabs, tabStripH);
 
     if (doc) {
@@ -575,7 +580,11 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
             }
             prevHover = g_hoverNode;
             if (m_layoutRoot) {
+                m_rt->PushAxisAlignedClip(
+                    D2D1::RectF(0, topInset, (float)m_width, (float)m_height),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 PaintBox(*m_layoutRoot, scrollY, topInset, false);
+                m_rt->PopAxisAlignedClip();
                 docH = m_layoutRoot->contentH + 32.f;
                 // If transitions are active, schedule another repaint.
                 if (TransitionManager::instance().hasActiveTransitions() && m_hwnd)

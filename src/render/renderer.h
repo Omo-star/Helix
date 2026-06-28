@@ -42,7 +42,8 @@ public:
                 const std::string& baseUrl,
                 float topInset   = 0.f,
                 float tabStripH  = 0.f,
-                const std::vector<TabEntry>* tabs = nullptr);
+                const std::vector<TabEntry>* tabs = nullptr,
+                bool repaintChrome = true);
 
     std::string HitTest(float x, float y) const;
     int  HitTestTab(float x, float y) const;
