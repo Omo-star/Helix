@@ -862,7 +862,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Pass 2: deferred scripts (after DOM is ready).
         if (idx >= 0 && idx < (int)g_tabs.size() && g_tabs[idx].page && g_tabs[idx].page->dom) {
             try {
-                auto repaint = [hwnd]() { InvalidateRect(hwnd, NULL, FALSE); };
+                auto repaint = []() { InvalidateContent(); };
                 g_js.setDocument(g_tabs[idx].page->dom, repaint, g_tabs[idx].page->url);
                 struct ScriptEntry { std::string source; std::string filename; };
                 std::vector<ScriptEntry> deferred;
@@ -998,7 +998,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     (float)px, (float)py, CurTab().scrollY, (float)TOP_INSET);
                 if (input) {
                     g_formState.focus(input);
-                    InvalidateRect(g_hwnd, nullptr, FALSE);
+                    InvalidateContent();
                     return 0;
                 }
                 g_formState.blur();
@@ -1115,7 +1115,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         lastHoverTick = now;
                         // Only invalidate paint, not layout — hover mostly affects
                         // colors/opacity, not geometry. Full layout rebuild is expensive.
-                        InvalidateRect(hwnd, NULL, FALSE);
+                        InvalidateContent();
                     }
                 }
             }
@@ -1124,7 +1124,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetStatus({});
             if (g_hoverNode) {
                 g_hoverNode = nullptr;
-                InvalidateRect(hwnd, NULL, FALSE);
+                InvalidateContent();
             }
         }
         return 0;
@@ -1189,36 +1189,36 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
             } else if (wp == '\b') {
                 g_formState.backspace();
-                InvalidateRect(g_hwnd, nullptr, FALSE);
+                InvalidateContent();
             } else if (wp >= 32) {
                 g_formState.insertChar((char)wp);
-                InvalidateRect(g_hwnd, nullptr, FALSE);
+                InvalidateContent();
             }
             return 0;
         }
         if (msg == WM_KEYDOWN) {
             if (wp == VK_LEFT && g_formState.cursorPos > 0) {
                 g_formState.cursorPos--;
-                InvalidateRect(g_hwnd, nullptr, FALSE);
+                InvalidateContent();
                 return 0;
             }
             if (wp == VK_RIGHT) {
                 std::string v = g_formState.getValue(g_formState.focusedInput);
                 if (g_formState.cursorPos < v.size()) g_formState.cursorPos++;
-                InvalidateRect(g_hwnd, nullptr, FALSE);
+                InvalidateContent();
                 return 0;
             }
             if (wp == VK_DELETE) {
                 g_formState.deleteChar();
-                InvalidateRect(g_hwnd, nullptr, FALSE);
+                InvalidateContent();
                 return 0;
             }
-            if (wp == VK_HOME) { g_formState.cursorPos = 0; InvalidateRect(g_hwnd, nullptr, FALSE); return 0; }
+            if (wp == VK_HOME) { g_formState.cursorPos = 0; InvalidateContent(); return 0; }
             if (wp == VK_END) {
                 g_formState.cursorPos = g_formState.getValue(g_formState.focusedInput).size();
-                InvalidateRect(g_hwnd, nullptr, FALSE); return 0;
+                InvalidateContent(); return 0;
             }
-            if (wp == VK_ESCAPE) { g_formState.blur(); InvalidateRect(g_hwnd, nullptr, FALSE); return 0; }
+            if (wp == VK_ESCAPE) { g_formState.blur(); InvalidateContent(); return 0; }
         }
     }
 
