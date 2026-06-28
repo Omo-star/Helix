@@ -211,6 +211,13 @@ inline void PaintBoxDecorations(PaintState& ps, const LayoutBox& box) {
     if (box.borderRight > 0)
         ps.r->FillRect(sx + bw - box.borderRight, sy, box.borderRight, bh, borderColor(s.borderRightColor));
 
+    // Outline (drawn outside the border box)
+    if (s.outlineSet && s.outlineWidth > 0) {
+        PlatColor oc = s.outlineColor.valid ? ToPlatColor(s.outlineColor) : PlatColor{0,0,0,1};
+        float ow = s.outlineWidth;
+        ps.r->DrawRect(sx - ow, sy - ow, bw + ow*2, bh + ow*2, oc, ow);
+    }
+
     // List marker
     if (box.kind == BoxKind::ListItem) {
         FontKey fk;

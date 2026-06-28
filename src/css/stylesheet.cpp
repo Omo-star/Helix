@@ -776,6 +776,18 @@ static void ApplyDeclaration(const std::string& prop,
                 try { out.aspectRatio = std::stof(v); out.aspectRatioSet = true; } catch (...) {}
             }
         }
+    } else if (prop == "text-shadow") {
+        std::string v = sTrim(val);
+        if (sLower(v) != "none") {
+            std::vector<std::string> toks; { std::string cur; int depth=0;
+                for (char c : v) { if (c=='(')++depth; else if(c==')')--depth;
+                    if (std::isspace((unsigned char)c)&&depth==0) { if (!cur.empty()){toks.push_back(cur);cur.clear();} }
+                    else cur+=c; } if (!cur.empty()) toks.push_back(cur); }
+            std::vector<float> nums; CssColor color={true,0,0,0,128};
+            for (auto& tok : toks) { float f=ParseLength(tok); if(f>-1e5f){nums.push_back(f);continue;} CssColor c=ParseCssColor(tok); if(c.valid)color=c; }
+            if (nums.size()>=2) { out.textShadowX=nums[0]; out.textShadowY=nums[1];
+                if(nums.size()>=3) out.textShadowBlur=nums[2]; out.textShadowColor=color; out.textShadowSet=true; }
+        }
     } else if (prop == "column-gap") {
         float f = ParseLength(sTrim(val));
         if (f >= 0) out.columnGap = f;
@@ -1284,9 +1296,22 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "opacity") {
         try { out.opacity = std::stof(sTrim(val)); out.opacitySet = true; } catch (...) {}
     // Properties parsed but not yet rendered — prevents rule dropping.
-    } else if (prop == "outline" || prop == "outline-width" || prop == "outline-style"
-            || prop == "outline-color" || prop == "outline-offset") {
-        // Parsed to avoid dropping rules; no visual effect yet.
+    } else if (prop == "outline") {
+        // Shorthand: [width] [style] [color]
+        std::vector<std::string> toks; std::istringstream oss(val); std::string otk;
+        while (oss >> otk) toks.push_back(otk);
+        out.outlineSet = true; out.outlineWidth = 2;
+        for (auto& t : toks) {
+            std::string tl = sLower(t);
+            if (tl == "none") { out.outlineWidth = 0; }
+            else if (tl == "solid" || tl == "dashed" || tl == "dotted" || tl == "double" || tl == "groove" || tl == "ridge" || tl == "inset" || tl == "outset") { /* style */ }
+            else { float f = ParseLength(t); if (f > 0) out.outlineWidth = f; else { CssColor c = ParseCssColor(t); if (c.valid) out.outlineColor = c; } }
+        }
+    } else if (prop == "outline-width") {
+        float f = ParseLength(sTrim(val)); if (f >= 0) { out.outlineWidth = f; out.outlineSet = true; }
+    } else if (prop == "outline-color") {
+        out.outlineColor = ParseCssColor(sTrim(val)); out.outlineSet = true;
+    } else if (prop == "outline-style" || prop == "outline-offset") {
     } else if (prop == "cursor" || prop == "pointer-events" || prop == "user-select"
             || prop == "-webkit-user-select" || prop == "-moz-user-select") {
         // Interaction properties — parsed but no visual effect.

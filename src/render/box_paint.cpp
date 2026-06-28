@@ -132,6 +132,14 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
         if (box.kind == BoxKind::Replaced && (sy + bh < topInset || sy > (float)m_height)) return;
     }
 
+    // Outline.
+    if (s.outlineSet && s.outlineWidth > 0 && m_rt) {
+        float ow = s.outlineWidth;
+        D2D1_COLOR_F oc = s.outlineColor.valid ? ToD2Dc(s.outlineColor) : D2D1::ColorF(0, 0, 0);
+        if (auto* b = TempBrush(oc))
+            m_rt->DrawRectangle(D2D1::RectF(sx-ow/2, sy-ow/2, sx+bw+ow/2, sy+bh+ow/2), b, ow);
+    }
+
     // Box shadow.
     if (s.shadowSet && s.shadowColor.valid && s.shadowColor.a > 0.01f && !s.shadowInset && m_rt) {
         float blur = s.shadowBlur;

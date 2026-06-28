@@ -93,6 +93,16 @@ struct ComputedStyle {
     bool     columnCountSet  = false;
     float    aspectRatio     = 0;    // width/height ratio (0=auto)
     bool     aspectRatioSet  = false;
+    // outline
+    float    outlineWidth    = 0;
+    CssColor outlineColor;
+    bool     outlineSet      = false;
+    // text-shadow
+    float    textShadowX     = 0;
+    float    textShadowY     = 0;
+    float    textShadowBlur  = 0;
+    CssColor textShadowColor;
+    bool     textShadowSet   = false;
     // Sizing
     float    width        = -1;
     float    widthPercent = -1;
@@ -280,6 +290,8 @@ struct ComputedStyle {
         if (child.textOverflowSet) { out.textOverflow = child.textOverflow; out.textOverflowSet = true; }
         if (child.columnCountSet) { out.columnCount = child.columnCount; out.columnGap = child.columnGap; out.columnCountSet = true; }
         if (child.aspectRatioSet) { out.aspectRatio = child.aspectRatio; out.aspectRatioSet = true; }
+        if (child.outlineSet) { out.outlineWidth = child.outlineWidth; out.outlineColor = child.outlineColor; out.outlineSet = true; }
+        if (child.textShadowSet) { out.textShadowX = child.textShadowX; out.textShadowY = child.textShadowY; out.textShadowBlur = child.textShadowBlur; out.textShadowColor = child.textShadowColor; out.textShadowSet = true; }
         if (child.width        >= 0) out.width     = child.width;
         if (child.widthPercent >= 0) out.widthPercent = child.widthPercent;
         if (child.height       >= 0) out.height    = child.height;
