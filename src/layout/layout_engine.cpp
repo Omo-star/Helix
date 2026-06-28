@@ -757,6 +757,8 @@ static bool establishesNewBfc(const ComputedStyle& s) {
 
 // ─── block layout ────────────────────────────────────────────────────────────
 
+static void TranslateSubtree(LayoutBox& box, float dx, float dy);
+
 // Lay out a single box (any kind) whose border-box top is to be placed by the
 // caller. The caller sets box.x/box.y for the border-box origin BEFORE calling
 // for in-flow blocks (we set x here from cbX + margins). Returns via box fields.
@@ -885,6 +887,50 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         layoutBlockChildren(box, positioned, inherit);
         for (auto* p : positioned) positionedOut.push_back(p);
         if (explicitH >= 0) box.contentH = explicitH;
+
+        // Multi-column layout: distribute children across N columns.
+        if (s.columnCountSet && s.columnCount > 1 && !box.kids.empty()) {
+            int cols = s.columnCount;
+            float gap = px(s.columnGap);
+            float colW = (box.contentW - gap * (cols - 1)) / cols;
+
+            // Compute total content height from all children.
+            float totalH = box.contentH;
+            float targetH = totalH / cols;  // ideal column height
+
+            // Assign each child to a column based on running height.
+            float runH = 0;
+            int curCol = 0;
+            float colY = box.contentY();
+            for (auto& k : box.kids) {
+                if (k->isOutOfFlow()) continue;
+                float childH = k->marginBoxH();
+                if (runH + childH > targetH && curCol < cols - 1 && runH > 0) {
+                    curCol++;
+                    runH = 0;
+                }
+                float dx = curCol * (colW + gap) - (k->x - box.contentX());
+                float dy = colY + runH - k->y;
+                // Resize child to column width.
+                float oldW = k->contentW;
+                k->contentW = std::max(0.f, colW - (k->borderBoxW() - oldW));
+                TranslateSubtree(*k, box.contentX() + curCol * (colW + gap) + k->marginLeft - k->x, dy);
+                runH += childH;
+            }
+            // Content height = tallest column.
+            float maxColH = 0;
+            float colHeights[16] = {};
+            for (auto& k : box.kids) {
+                if (k->isOutOfFlow()) continue;
+                float relX = k->x - box.contentX();
+                int c = (int)(relX / (colW + gap + 0.1f));
+                if (c >= 0 && c < cols && c < 16)
+                    colHeights[c] = std::max(colHeights[c], k->y + k->marginBoxH() - box.contentY());
+            }
+            for (int c = 0; c < std::min(cols, 16); ++c)
+                maxColH = std::max(maxColH, colHeights[c]);
+            box.contentH = maxColH;
+        }
     }
 
     // min/max height clamp on the final content height.

@@ -762,6 +762,12 @@ static void ApplyDeclaration(const std::string& prop,
         std::string v = sLower(sTrim(val));
         out.textOverflowSet = true;
         out.textOverflow = (v == "ellipsis") ? 1 : 0;
+    } else if (prop == "column-count") {
+        std::string v = sLower(sTrim(val));
+        if (v != "auto") { try { out.columnCount = std::stoi(v); out.columnCountSet = true; } catch (...) {} }
+    } else if (prop == "column-gap") {
+        float f = ParseLength(sTrim(val));
+        if (f >= 0) out.columnGap = f;
     } else if (prop == "display") {
         std::string v = sLower(sTrim(val));
         if      (v == "none")                                          out.display = 3;
@@ -1296,7 +1302,7 @@ static void ApplyDeclaration(const std::string& prop,
             || prop == "font-variant" || prop == "font-variant-ligatures"
             || prop == "font-display" || prop == "src"
             || prop == "text-size-adjust" || prop == "tab-size"
-            || prop == "column-count" || prop == "column-gap" || prop == "columns"
+            || prop == "columns"
             || prop == "aspect-ratio" || prop == "place-items" || prop == "place-content"
             || prop == "grid-template-rows" || prop == "grid-column" || prop == "grid-row"
             || prop == "grid-area" || prop == "grid-auto-flow" || prop == "grid-auto-rows"
