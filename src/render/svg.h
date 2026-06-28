@@ -762,6 +762,7 @@ inline SvgBitmap renderSvg(const Node* svgNode,int maxDim=512){
 // ── Utility ─────────────────────────────────────────────────────────────────
 
 inline bool looksLikeSvgBytes(const std::vector<uint8_t>& bytes){if(bytes.empty())return false;const size_t n=std::min<size_t>(bytes.size(),512);std::string head;head.reserve(n);for(size_t i=0;i<n;++i)head+=(char)std::tolower((unsigned char)bytes[i]);return head.find("<svg")!=std::string::npos||head.find("<?xml")!=std::string::npos||head.find("image/svg+xml")!=std::string::npos;}
+inline int SvgRasterMaxDimForBytes(size_t byteCount){return byteCount<4096?256:(byteCount<32768?512:1024);}
 inline const Node* findSvgNode(const Node* node){if(!node)return nullptr;if(node->type==NodeType::Element&&node->tagName=="svg")return node;for(const auto&child:node->children)if(const Node*found=findSvgNode(child.get()))return found;return nullptr;}
 inline SvgBitmap renderSvgBytes(const std::string& text,int maxDim=512){auto doc=ParseHtml(text);const Node*svgNode=findSvgNode(doc.get());return svgNode?renderSvg(svgNode,maxDim):SvgBitmap{};}
 inline SvgBitmap renderSvgBytes(const std::vector<uint8_t>& bytes,int maxDim=512){return renderSvgBytes(std::string(bytes.begin(),bytes.end()),maxDim);}

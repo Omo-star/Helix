@@ -7,6 +7,7 @@
 #include "js/parser.h"
 #include "js/runtime.h"
 #include "js/vm.h"
+#include "js/dom_bridge.h"
 #include "html/parser.h"
 
 #include <sstream>
@@ -153,6 +154,22 @@ static std::string RunDomObserverSnapshot() {
     return box ? box->attr("data-result") + "\n" : "missing box\n";
 }
 
+static std::string RunDomDirtyCoalescingSnapshot() {
+    JsEngine engine;
+    int repaintCount = 0;
+    auto dom = ParseHtml("<html><body><div id=\"box\"></div></body></html>");
+    resetDomDirtyCoalesce();
+    engine.setDocument(dom, [&]() { repaintCount++; });
+    bool ok = engine.runScript(
+        "var el = document.getElementById('box');\n"
+        "el.firstCustomProperty = 1;\n"
+        "el.secondCustomProperty = 2;\n",
+        "dom-dirty-coalesce");
+    resetDomDirtyCoalesce();
+    if (!ok) return "script failed\n";
+    return std::to_string(repaintCount) + "\n";
+}
+
 TestResult RunJsTests() {
     TestResult result;
 
@@ -172,6 +189,12 @@ TestResult RunJsTests() {
         "js/dom/observers-fire",
         RunDomObserverSnapshot(),
         "1:1:1\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/direct-property-writes-coalesce-repaint",
+        RunDomDirtyCoalescingSnapshot(),
+        "1\n",
         result);
 
     ExpectJsResult(

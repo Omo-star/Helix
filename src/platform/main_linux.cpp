@@ -15,6 +15,7 @@
 #include <set>
 #include "layout/layout_engine.h"
 #include "css/stylesheet.h"
+#include "js/dom_bridge.h"
 #include <cctype>
 
 // ── globals ──────────────────────────────────────────────────────────────────
@@ -63,7 +64,7 @@ static void ProcessImage(const std::string& url, const std::vector<uint8_t>& byt
     uint8_t* pixels = nullptr;
     bool fromStbi = false;
     if (looksLikeSvgUrl(url) || svg::looksLikeSvgBytes(bytes)) {
-        auto bmp = svg::renderSvgBytes(bytes, 2048);
+        auto bmp = svg::renderSvgBytes(bytes, svg::SvgRasterMaxDimForBytes(bytes.size()));
         if (bmp.width > 0 && bmp.height > 0 && !bmp.pixels.empty()) {
             w = bmp.width;
             h = bmp.height;
@@ -425,6 +426,14 @@ int main(int argc, char* argv[]) {
         gtk_window_set_keep_above(GTK_WINDOW(data), FALSE);
         return G_SOURCE_REMOVE;
     }, g_window);
+    g_timeout_add(16, [](gpointer) -> gboolean {
+        resetDomDirtyCoalesce();
+        try {
+            g_js.runMacrotasks();
+        } catch (...) {
+        }
+        return G_SOURCE_CONTINUE;
+    }, nullptr);
     gtk_main();
     return 0;
 }

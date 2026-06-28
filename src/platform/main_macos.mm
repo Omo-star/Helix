@@ -12,6 +12,7 @@
 #include "platform/plat_text_measure.h"
 #include "layout/layout_engine.h"
 #include "css/stylesheet.h"
+#include "js/dom_bridge.h"
 
 // ── forward declarations ─────────────────────────────────────────────────────
 
@@ -358,6 +359,13 @@ int main(int argc, const char* argv[]) {
             });
         };
         g_chrome.init();
+        [NSTimer scheduledTimerWithTimeInterval:0.016 repeats:YES block:^(NSTimer*) {
+            resetDomDirtyCoalesce();
+            try {
+                g_js.runMacrotasks();
+            } catch (...) {
+            }
+        }];
 
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];

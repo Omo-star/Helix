@@ -306,15 +306,17 @@ static void notifyMutationObservers(VM& vm, Node* target, const std::string& typ
 
 static bool g_domDirtyCoalesced = false;
 
-static void markDomDirty(VM& vm, Node* target, const std::string& type) {
+void notifyDomDirtyCoalesced(VM& vm) {
     vm.domDirty = true;
-    notifyMutationObservers(vm, target, type);
-    // Coalesce: set flag instead of repainting per-mutation.
-    // The platform's timer tick (WM_TIMER / g_timeout_add) will repaint once.
     if (!g_domDirtyCoalesced && vm.onDomDirty) {
         g_domDirtyCoalesced = true;
         vm.onDomDirty();
     }
+}
+
+static void markDomDirty(VM& vm, Node* target, const std::string& type) {
+    notifyMutationObservers(vm, target, type);
+    notifyDomDirtyCoalesced(vm);
 }
 
 // Call this from the platform timer to reset coalescing for the next batch.

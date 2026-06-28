@@ -87,6 +87,8 @@ ID2D1SolidColorBrush* Renderer::TempBrush(D2D1_COLOR_F color) {
 
 void Renderer::CreateTabFont() {
     if (m_fmtTab) { m_fmtTab->Release(); m_fmtTab = nullptr; }
+    if (m_fmtTabClose) { m_fmtTabClose->Release(); m_fmtTabClose = nullptr; }
+    if (m_fmtTabPlus) { m_fmtTabPlus->Release(); m_fmtTabPlus = nullptr; }
     if (!m_dwrite) return;
     m_dwrite->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -95,6 +97,20 @@ void Renderer::CreateTabFont() {
         m_fmtTab->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         m_fmtTab->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         m_fmtTab->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
+    m_dwrite->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 12.f, L"en-us", &m_fmtTabClose);
+    if (m_fmtTabClose) {
+        m_fmtTabClose->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        m_fmtTabClose->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
+    m_dwrite->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &m_fmtTabPlus);
+    if (m_fmtTabPlus) {
+        m_fmtTabPlus->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        m_fmtTabPlus->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 }
 
@@ -174,6 +190,8 @@ Renderer::~Renderer() {
     ReleaseTarget();
     auto r = [](auto*& p) { if (p) { p->Release(); p = nullptr; } };
     r(m_fmtTab);
+    r(m_fmtTabClose);
+    r(m_fmtTabPlus);
     for (auto& [k, f] : m_fmtCache) if (f) f->Release();
     m_fmtCache.clear();
     r(m_dwrite); r(m_factory);
@@ -209,9 +227,7 @@ void Renderer::ReceiveImage(const std::string& url, const std::vector<uint8_t>& 
     uint8_t* pixels = nullptr;
     bool fromStbi = false;
     if (LooksLikeSvgUrl(url) || svg::looksLikeSvgBytes(bytes)) {
-        // Cap SVG decode size based on data size — small icons don't need 2048px.
-        int svgMaxDim = bytes.size() < 4096 ? 256 : (bytes.size() < 32768 ? 512 : 1024);
-        auto bmp = svg::renderSvgBytes(bytes, svgMaxDim);
+        auto bmp = svg::renderSvgBytes(bytes, svg::SvgRasterMaxDimForBytes(bytes.size()));
         if (bmp.width > 0 && bmp.height > 0 && !bmp.pixels.empty()) {
             w = bmp.width;
             h = bmp.height;
@@ -290,19 +306,9 @@ void Renderer::DrawTabStrip(const std::vector<TabEntry>& tabs, float h) {
         }
 
         float cx = x + tabW - closeW, cy = (tabH - 14.f) / 2.f;
-        if (m_fmtTab) {
-            IDWriteTextFormat* closeFmt = nullptr;
-            m_dwrite->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.f, L"en-us", &closeFmt);
-            if (closeFmt) {
-                closeFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                closeFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                m_rt->DrawText(L"\x00D7", 1, closeFmt, D2D1::RectF(cx, 0, cx + closeW, tabH), m_tabClsBrush);
-                closeFmt->Release();
-            } else {
-                m_rt->DrawText(L"\x00D7", 1, m_fmtTab, D2D1::RectF(cx, 0, cx + closeW, tabH), m_tabClsBrush);
-            }
-        }
+        IDWriteTextFormat* closeFormat = m_fmtTabClose ? m_fmtTabClose : m_fmtTab;
+        if (closeFormat)
+            m_rt->DrawText(L"\x00D7", 1, closeFormat, D2D1::RectF(cx, 0, cx + closeW, tabH), m_tabClsBrush);
 
         m_tabHits.push_back({ x, 0, tabW, tabH, i, false });
         m_tabHits.push_back({ cx, cy, closeW, 14.f, i, true });
@@ -311,20 +317,9 @@ void Renderer::DrawTabStrip(const std::vector<TabEntry>& tabs, float h) {
 
     float nx = avail + 4.f;
     m_rt->FillRectangle(D2D1::RectF(nx, 2.f, nx + newBtnW - 2.f, tabH - 2.f), m_tabInaBrush);
-    if (m_fmtTab) {
-        // Center the "+" both horizontally and vertically.
-        IDWriteTextFormat* centered = nullptr;
-        m_dwrite->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &centered);
-        if (centered) {
-            centered->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            centered->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            m_rt->DrawText(L"+", 1, centered, D2D1::RectF(nx, 0, nx + newBtnW, tabH), m_tabTxtBrush);
-            centered->Release();
-        } else {
-            m_rt->DrawText(L"+", 1, m_fmtTab, D2D1::RectF(nx, 0, nx + newBtnW, tabH), m_tabTxtBrush);
-        }
-    }
+    IDWriteTextFormat* plusFormat = m_fmtTabPlus ? m_fmtTabPlus : m_fmtTab;
+    if (plusFormat)
+        m_rt->DrawText(L"+", 1, plusFormat, D2D1::RectF(nx, 0, nx + newBtnW, tabH), m_tabTxtBrush);
     m_tabHits.push_back({ nx, 0, newBtnW, tabH, -1, false });
 
     m_rt->DrawLine(D2D1::Point2F(0, h - 1.f), D2D1::Point2F(w, h - 1.f), m_hrBrush, 1.f);
@@ -363,6 +358,24 @@ static std::string UrlDecodeSimple(const std::string& s) {
         } else { out += s[i]; }
     }
     return out;
+}
+
+static bool SelectorPartUsesHover(const CssSelectorPart& part) {
+    for (const auto& pseudo : part.pseudos)
+        if (pseudo == "hover") return true;
+    for (const auto& selector : part.notSelectors)
+        if (selector.find(":hover") != std::string::npos) return true;
+    for (const auto& list : part.matchSelectorLists)
+        for (const auto& selector : list)
+            if (selector.find(":hover") != std::string::npos) return true;
+    return false;
+}
+
+static bool StylesheetUsesHover(const Stylesheet& sheet) {
+    for (const auto& rule : sheet.rules)
+        for (const auto& part : rule.selector)
+            if (SelectorPartUsesHover(part)) return true;
+    return false;
 }
 
 Stylesheet Renderer::CollectStylesheet(const Node* root) {
@@ -477,8 +490,9 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
             extern const Node* g_hoverNode;
             static const Node* prevHover = nullptr;
             bool hoverChanged = (g_hoverNode != prevHover);
+            bool hoverMayAffectStyle = hoverChanged && StylesheetUsesHover(sheet);
             std::map<const Node*, ComputedStyle> oldStyles;
-            if (hoverChanged && m_layoutRoot) {
+            if (hoverMayAffectStyle && m_layoutRoot) {
                 std::function<void(const LayoutBox&)> collect = [&](const LayoutBox& b) {
                     if (b.node && oldStyles.find(b.node) == oldStyles.end())
                         oldStyles.emplace(b.node, b.style);
@@ -492,7 +506,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                       && m_layoutWKey    == m_width
                       && m_layoutHKey    == m_height
                       && m_layoutZoomKey == effZoom
-                      && !hoverChanged;
+                      && !hoverMayAffectStyle;
             if (!reuse) {
                 LayoutInput in;
                 in.document  = doc.get();
@@ -510,7 +524,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                 m_anchorY.clear();
                 if (m_layoutRoot) CollectAnchors(*m_layoutRoot);
             }
-            if (hoverChanged && m_layoutRoot && !oldStyles.empty()) {
+            if (hoverMayAffectStyle && m_layoutRoot && !oldStyles.empty()) {
                 std::set<const Node*> transitioned;
                 std::function<void(const LayoutBox&)> startTransitions = [&](const LayoutBox& b) {
                     if (b.node && transitioned.insert(b.node).second) {

@@ -1,4 +1,5 @@
 #include "js/vm.h"
+#include "js/dom_bridge.h"
 #include <cmath>
 #include <algorithm>
 #include <cassert>
@@ -461,7 +462,7 @@ JsValue VM::runFrame(CallFrame& frame) {
         case OP_SET_PROP: {
             JsValue obj = REG(ins.a), key = REG(ins.b), val = REG(ins.c);
             setProp(obj, key, val);
-            if (obj.isObject() && obj.asObject()->domNode) { domDirty = true; if (onDomDirty) onDomDirty(); }
+            if (obj.isObject() && obj.asObject()->domNode) notifyDomDirtyCoalesced(*this);
             break;
         }
         case OP_GET_PROP_S: {
@@ -479,7 +480,7 @@ JsValue VM::runFrame(CallFrame& frame) {
                 const Instruction& next = code[frame.pc++];
                 setProp(REG(ins.a), k, REG(next.a));
                 if (REG(ins.a).isObject() && REG(ins.a).asObject()->domNode) {
-                    domDirty = true; if (onDomDirty) onDomDirty();
+                    notifyDomDirtyCoalesced(*this);
                 }
             }
             break;

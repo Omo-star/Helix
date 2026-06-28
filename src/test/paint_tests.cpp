@@ -37,6 +37,43 @@ TestResult RunPaintTests() {
     }
 
     {
+        auto root = FindRepoRoot();
+        std::string linuxMain = ReadTextFile(root / "src/platform/main_linux.cpp");
+        std::string winRenderer = ReadTextFile(root / "src/render/renderer.cpp");
+        const bool sharedPolicy =
+            linuxMain.find("SvgRasterMaxDimForBytes") != std::string::npos
+            && winRenderer.find("SvgRasterMaxDimForBytes") != std::string::npos
+            && linuxMain.find("renderSvgBytes(bytes, 2048)") == std::string::npos;
+        ExpectEqual("paint/svg-decode-cap-is-shared-across-platforms",
+            sharedPolicy ? "shared\n" : "hardcoded\n",
+            "shared\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string renderer = ReadTextFile(root / "src/render/renderer.cpp");
+        const bool hoverDoesNotAlwaysRebuild =
+            renderer.find("&& !hoverChanged") == std::string::npos;
+        ExpectEqual("paint/hover-does-not-always-break-layout-cache",
+            hoverDoesNotAlwaysRebuild ? "conditional\n" : "always\n",
+            "conditional\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string renderer = ReadTextFile(root / "src/render/renderer.cpp");
+        const bool cached =
+            renderer.find("IDWriteTextFormat* closeFmt = nullptr") == std::string::npos
+            && renderer.find("IDWriteTextFormat* centered = nullptr") == std::string::npos;
+        ExpectEqual("paint/tab-strip-centering-formats-are-cached",
+            cached ? "cached\n" : "per-paint\n",
+            "cached\n",
+            result);
+    }
+
+    {
         const std::string svg =
             "<svg width=\"12\" height=\"10\" viewBox=\"0 0 12 10\">"
             "<rect x=\"1\" y=\"2\" width=\"4\" height=\"3\" fill=\"red\"/>"

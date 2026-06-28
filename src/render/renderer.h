@@ -85,7 +85,9 @@ private:
     ID2D1SolidColorBrush*   m_tabTxtBrush= nullptr;
     ID2D1SolidColorBrush*   m_tabClsBrush= nullptr;
 
-    IDWriteTextFormat*      m_fmtTab    = nullptr;   // tab titles (not zoom-scaled)
+    IDWriteTextFormat*      m_fmtTab      = nullptr;   // tab titles (not zoom-scaled)
+    IDWriteTextFormat*      m_fmtTabClose = nullptr;
+    IDWriteTextFormat*      m_fmtTabPlus  = nullptr;
 
     float m_zoom = 1.f;
 
