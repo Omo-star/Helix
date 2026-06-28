@@ -765,6 +765,17 @@ static void ApplyDeclaration(const std::string& prop,
     } else if (prop == "column-count") {
         std::string v = sLower(sTrim(val));
         if (v != "auto") { try { out.columnCount = std::stoi(v); out.columnCountSet = true; } catch (...) {} }
+    } else if (prop == "aspect-ratio") {
+        std::string v = sTrim(val);
+        if (v != "auto") {
+            size_t slash = v.find('/');
+            if (slash != std::string::npos) {
+                try { float w = std::stof(v.substr(0, slash)), h = std::stof(v.substr(slash + 1));
+                    if (h > 0) { out.aspectRatio = w / h; out.aspectRatioSet = true; } } catch (...) {}
+            } else {
+                try { out.aspectRatio = std::stof(v); out.aspectRatioSet = true; } catch (...) {}
+            }
+        }
     } else if (prop == "column-gap") {
         float f = ParseLength(sTrim(val));
         if (f >= 0) out.columnGap = f;
@@ -853,7 +864,7 @@ static void ApplyDeclaration(const std::string& prop,
             else if (tl == "wrap-reverse") { out.flexWrap = 2; out.flexWrapSet = true; }
             else if (tl == "nowrap") { out.flexWrap = 0; out.flexWrapSet = true; }
         }
-    } else if (prop == "gap") {
+    } else if (prop == "gap" || prop == "row-gap") {
         std::istringstream values(val);
         std::string gap;
         values >> gap;
@@ -1303,10 +1314,10 @@ static void ApplyDeclaration(const std::string& prop,
             || prop == "font-display" || prop == "src"
             || prop == "text-size-adjust" || prop == "tab-size"
             || prop == "columns"
-            || prop == "aspect-ratio" || prop == "place-items" || prop == "place-content"
+            || prop == "place-items" || prop == "place-content"
             || prop == "grid-template-rows" || prop == "grid-column" || prop == "grid-row"
             || prop == "grid-area" || prop == "grid-auto-flow" || prop == "grid-auto-rows"
-            || prop == "grid-auto-columns" || prop == "row-gap"
+            || prop == "grid-auto-columns"
             || prop == "order" || prop == "counter-reset" || prop == "counter-increment"
             || prop == "quotes" || prop == "hyphens") {
         // Known properties parsed to prevent rule dropping. No visual effect yet.

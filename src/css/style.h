@@ -91,6 +91,8 @@ struct ComputedStyle {
     int      columnCount     = 0;    // 0=auto (no multi-column), >0=number of columns
     float    columnGap       = 16;   // gap between columns (default ~1em)
     bool     columnCountSet  = false;
+    float    aspectRatio     = 0;    // width/height ratio (0=auto)
+    bool     aspectRatioSet  = false;
     // Sizing
     float    width        = -1;
     float    widthPercent = -1;
@@ -277,6 +279,7 @@ struct ComputedStyle {
         if (child.wordBreakSet) { out.wordBreak = child.wordBreak; out.wordBreakSet = true; }
         if (child.textOverflowSet) { out.textOverflow = child.textOverflow; out.textOverflowSet = true; }
         if (child.columnCountSet) { out.columnCount = child.columnCount; out.columnGap = child.columnGap; out.columnCountSet = true; }
+        if (child.aspectRatioSet) { out.aspectRatio = child.aspectRatio; out.aspectRatioSet = true; }
         if (child.width        >= 0) out.width     = child.width;
         if (child.widthPercent >= 0) out.widthPercent = child.widthPercent;
         if (child.height       >= 0) out.height    = child.height;

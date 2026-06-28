@@ -933,6 +933,10 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         }
     }
 
+    // aspect-ratio: if height is auto and aspect-ratio is set, derive height from width.
+    if (s.aspectRatioSet && s.aspectRatio > 0 && explicitH < 0)
+        box.contentH = box.contentW / s.aspectRatio;
+
     // min/max height clamp on the final content height.
     if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, bbHeight(px(s.maxHeight)));
     if (s.minHeight >= 0) box.contentH = std::max(box.contentH, bbHeight(px(s.minHeight)));
