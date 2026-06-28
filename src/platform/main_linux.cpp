@@ -7,10 +7,9 @@
 //
 #include <gtk/gtk.h>
 #include "platform/platform.h"
-#include "platform/browser_core.h"
+#include "platform/chrome.h"
 #include "platform/box_painter.h"
 #include "platform/plat_text_measure.h"
-#include "platform/updater.h"
 #include "render/svg.h"
 #include "third_party/stb_image.h"
 #include <set>
@@ -25,9 +24,12 @@ static GtkWidget* g_urlEntry;
 static GtkWidget* g_statusLabel;
 static GtkWidget* g_drawingArea;
 
-static std::vector<Tab> g_tabs;
-static int g_activeTab = 0;
-static JsEngine g_js;
+static BrowserChrome g_chrome;
+static auto& g_tabs      = g_chrome.state.tabs;
+static auto& g_activeTab = g_chrome.state.activeTab;
+static auto& g_js        = g_chrome.state.js;
+static auto& g_formState = g_chrome.state.form;
+static auto& g_updater   = g_chrome.state.updater;
 static Semaphore g_imageFetchGate(6);
 
 static std::unique_ptr<IPlatformRenderer> g_renderer;
@@ -37,8 +39,6 @@ static std::map<std::string, PlatBitmap> g_images;
 static std::set<std::string> g_loadingImages;
 static std::set<std::string> g_failedImages;
 static std::map<std::string, PlatFont> g_fontCache;
-static FormState g_formState;
-static Updater g_updater;
 
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
 
