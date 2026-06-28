@@ -14,6 +14,29 @@ struct Node {
     std::vector<std::shared_ptr<Node>> children;
     Node*       parent  = nullptr;
 
+    ~Node() {
+        auto moveUniqueChildren = [](Node* node, std::vector<std::shared_ptr<Node>>& stack) {
+            std::vector<std::shared_ptr<Node>> retained;
+            retained.reserve(node->children.size());
+            for (auto& child : node->children) {
+                if (child && child.use_count() == 1)
+                    stack.push_back(std::move(child));
+                else
+                    retained.push_back(std::move(child));
+            }
+            node->children = std::move(retained);
+        };
+
+        std::vector<std::shared_ptr<Node>> stack;
+        moveUniqueChildren(this, stack);
+        while (!stack.empty()) {
+            auto current = std::move(stack.back());
+            stack.pop_back();
+            if (!current) continue;
+            moveUniqueChildren(current.get(), stack);
+        }
+    }
+
     std::string attr(const std::string& key) const {
         auto it = attrs.find(key);
         return it != attrs.end() ? it->second : "";

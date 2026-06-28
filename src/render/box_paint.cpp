@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <cctype>
+#include <cmath>
 
 static D2D1_COLOR_F ToD2Dc(const CssColor& c) { return { c.r, c.g, c.b, c.a }; }
 static constexpr size_t kMaxMeasuredTextChars = 16 * 1024;
@@ -399,6 +400,45 @@ void Renderer::PaintBoxDecorations(const LayoutBox& box, float scrollY, float to
 }
 
 // ─── inline line painting ─────────────────────────────────────────────────────
+
+bool Renderer::FindTextY(const std::wstring& query, float currentY, bool backwards, float& outY) const {
+    if (!m_layoutRoot || query.empty()) return false;
+    std::wstring needle = query;
+    std::transform(needle.begin(), needle.end(), needle.begin(), ::towlower);
+
+    std::vector<float> hits;
+    std::function<void(const LayoutBox&)> collect = [&](const LayoutBox& box) {
+        for (const auto& line : box.lines) {
+            for (const auto& frag : line.frags) {
+                if (frag.text.empty()) continue;
+                std::wstring hay = frag.text;
+                std::transform(hay.begin(), hay.end(), hay.begin(), ::towlower);
+                if (hay.find(needle) != std::wstring::npos) hits.push_back(frag.y);
+            }
+        }
+        for (const auto& kid : box.kids)
+            if (kid) collect(*kid);
+    };
+    collect(*m_layoutRoot);
+    if (hits.empty()) return false;
+    std::sort(hits.begin(), hits.end());
+    hits.erase(std::unique(hits.begin(), hits.end(), [](float a, float b) {
+        return std::fabs(a - b) < 0.5f;
+    }), hits.end());
+
+    if (backwards) {
+        for (auto it = hits.rbegin(); it != hits.rend(); ++it) {
+            if (*it < currentY - 2.f) { outY = *it; return true; }
+        }
+        outY = hits.back();
+        return true;
+    }
+    for (float y : hits) {
+        if (y > currentY + 2.f) { outY = y; return true; }
+    }
+    outY = hits.front();
+    return true;
+}
 
 void Renderer::PaintLines(const LayoutBox& box, float scrollY, float topInset, bool underFixed) {
     for (const auto& line : box.lines) {

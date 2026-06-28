@@ -120,6 +120,37 @@ TestResult RunCssTests() {
     {
         auto dom = ParseHtml(
             "<html><body>"
+            "<input id=\"checked\" checked>"
+            "<input id=\"disabled\" disabled>"
+            "<input id=\"enabled\">"
+            "<div id=\"plain\"></div>"
+            "</body></html>");
+        auto sheet = ParseStylesheet(
+            "input:checked { color: red; }"
+            "input:disabled { padding-left: 2px; }"
+            "input:enabled { padding-right: 3px; }"
+            "input:focus { margin-left: 4px; }"
+            "div:enabled { margin-right: 9px; }");
+        SetCssFocusNode(FindElementById(dom.get(), "enabled"));
+        std::string actual;
+        for (const std::string id : { "checked", "disabled", "enabled", "plain" }) {
+            auto* node = FindElementById(dom.get(), id);
+            actual += id + ": ";
+            actual += node ? SerializeComputedStyle(sheet.resolve(node)) : "missing\n";
+        }
+        SetCssFocusNode(nullptr);
+        ExpectEqual("css/cascade/form-state-pseudo-classes",
+            actual,
+            "checked: color=1,0,0,1 paddingRight=3 \n"
+            "disabled: paddingLeft=2 \n"
+            "enabled: marginLeft=4 paddingRight=3 \n"
+            "plain: \n",
+            result);
+    }
+
+    {
+        auto dom = ParseHtml(
+            "<html><body>"
             "<p id=\"is-hit\" class=\"target primary\"></p>"
             "<p id=\"where-hit\" class=\"target secondary\"></p>"
             "<p id=\"miss\" class=\"target\"></p>"

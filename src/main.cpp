@@ -366,6 +366,22 @@ static void ShowFind(bool show) {
     SetWindowPos(g_hwndFind,   NULL, 0, h - STATUS_H - FIND_H, w, FIND_H, SWP_NOZORDER);
 }
 
+static void FindNextInPage(bool backwards) {
+    if (!g_findVisible) ShowFind(true);
+    wchar_t buf[512] = {};
+    GetWindowTextW(g_hwndFind, buf, 512);
+    std::wstring query = buf;
+    if (query.empty()) return;
+    g_renderer.SetSearchQuery(query);
+    float hitY = 0.f;
+    if (g_renderer.FindTextY(query, CurTab().scrollY, backwards, hitY)) {
+        CurTab().scrollY = std::max(0.f, hitY - 24.f);
+        ClampScroll();
+        UpdateScrollbar();
+    }
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
 LRESULT CALLBACK FindProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                            UINT_PTR, DWORD_PTR) {
     if (msg == WM_KEYDOWN) {
@@ -947,7 +963,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
                     ShowFind(!g_findVisible);
                     handled = true;
                 } else if (msg.wParam == 'G') {
-                    // Ctrl+G / Ctrl+Shift+G = find next / prev (stub for now)
+                    FindNextInPage(shift);
                     handled = true;
                 } else if (msg.wParam == VK_OEM_PLUS || msg.wParam == '=') {
                     g_renderer.SetZoom(g_renderer.GetZoom() + 0.1f);

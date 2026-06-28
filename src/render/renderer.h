@@ -62,6 +62,7 @@ public:
 
     void SetSearchQuery(const std::wstring& q) { m_searchQuery = q; }
     const std::wstring& GetSearchQuery() const { return m_searchQuery; }
+    bool FindTextY(const std::wstring& query, float currentY, bool backwards, float& outY) const;
 
 private:
     // ── D2D / DWrite / WIC ────────────────────────────────────────────────

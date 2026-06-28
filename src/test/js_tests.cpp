@@ -87,6 +87,14 @@ static Node* FindByTag(Node* n, const std::string& tag) {
     return nullptr;
 }
 
+static Node* FindById(Node* n, const std::string& id) {
+    if (!n) return nullptr;
+    if (n->attr("id") == id) return n;
+    for (auto& c : n->children)
+        if (Node* r = FindById(c.get(), id)) return r;
+    return nullptr;
+}
+
 // Run a script against a tiny DOM, then read back the <p> node's attributes to
 // prove that className / classList / style / textContent writes mutate the real
 // DOM (not just the JS wrapper).
@@ -110,6 +118,41 @@ static std::string RunDomReflectionSnapshot() {
          + " text=" + text + "\n";
 }
 
+static std::string RunDomCssomGeometrySnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml(
+        "<html><body><div id=\"box\" style=\"position:absolute; left:12px; top:7px; width:123px; height:45px; display:block; color:red\">Hi</div></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var el = document.getElementById('box');\n"
+        "var r = el.getBoundingClientRect();\n"
+        "var cs = getComputedStyle(el);\n"
+        "el.setAttribute('data-result', el.offsetWidth + 'x' + el.offsetHeight + ':' + r.left + ',' + r.top + ':' + cs.getPropertyValue('width') + ':' + cs.display);\n",
+        "cssom-geometry");
+    if (!ok) return "script failed\n";
+    Node* box = FindById(dom.get(), "box");
+    return box ? box->attr("data-result") + "\n" : "missing box\n";
+}
+
+static std::string RunDomObserverSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><div id=\"box\" style=\"width:10px; height:20px\"></div></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var el = document.getElementById('box');\n"
+        "var mutations = 0, intersections = 0, resizes = 0;\n"
+        "var mo = new MutationObserver(function(records){ mutations += records.length; });\n"
+        "mo.observe(el, { attributes: true });\n"
+        "el.setAttribute('data-x', '1');\n"
+        "new IntersectionObserver(function(records){ intersections = records.length; }).observe(el);\n"
+        "new ResizeObserver(function(records){ resizes = records.length; }).observe(el);\n"
+        "el.setAttribute('data-result', mutations + ':' + intersections + ':' + resizes);\n",
+        "observers");
+    if (!ok) return "script failed\n";
+    Node* box = FindById(dom.get(), "box");
+    return box ? box->attr("data-result") + "\n" : "missing box\n";
+}
+
 TestResult RunJsTests() {
     TestResult result;
 
@@ -117,6 +160,18 @@ TestResult RunJsTests() {
         "js/dom/property-writes-reflect-to-node",
         RunDomReflectionSnapshot(),
         "class=b c style=display: none text=Bye\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/cssom-geometry",
+        RunDomCssomGeometrySnapshot(),
+        "123x45:12,7:123px:block\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/observers-fire",
+        RunDomObserverSnapshot(),
+        "1:1:1\n",
         result);
 
     ExpectJsResult(

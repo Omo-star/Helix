@@ -11,7 +11,9 @@
 // inherited font size of unrelated selectors.
 static float g_emBase = 16.f;
 static const Node* g_hoverNodeCss = nullptr;
+static const Node* g_focusNodeCss = nullptr;
 void SetCssHoverNode(const Node* node) { g_hoverNodeCss = node; }
+void SetCssFocusNode(const Node* node) { g_focusNodeCss = node; }
 
 // Viewport dimensions for vw/vh/vmin/vmax units. Set by the layout engine
 // before style resolution so CSS lengths resolve against the real window.
@@ -1602,10 +1604,21 @@ static bool MatchesPseudoClass(const std::string& pseudo, const Node* node) {
         }
         return false;
     }
-    // :focus/:active/:visited/:checked/:disabled/:enabled — stubs.
-    if (pseudo == "focus" || pseudo == "active"
-        || pseudo == "visited" || pseudo == "checked" || pseudo == "disabled"
-        || pseudo == "enabled") return false;
+    // Form/document state pseudos with the state Helix currently tracks.
+    if (pseudo == "focus") return node && node == g_focusNodeCss;
+    if (pseudo == "checked") {
+        if (!node) return false;
+        return node->attrs.find("checked") != node->attrs.end()
+            || node->attrs.find("selected") != node->attrs.end();
+    }
+    if (pseudo == "disabled") return node && node->attrs.find("disabled") != node->attrs.end();
+    if (pseudo == "enabled") {
+        if (!node || node->attrs.find("disabled") != node->attrs.end()) return false;
+        const std::string& t = node->tagName;
+        return t == "button" || t == "input" || t == "select" || t == "textarea"
+            || t == "option" || t == "optgroup" || t == "fieldset";
+    }
+    if (pseudo == "active" || pseudo == "visited") return false;
     return false;
 }
 

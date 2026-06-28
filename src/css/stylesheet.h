@@ -86,6 +86,7 @@ Stylesheet ParseStylesheet(const std::string& css);
 ComputedStyle ParseInlineStyle(const std::string& style);
 void ResolveStyleVariables(ComputedStyle& style);
 void SetCssHoverNode(const Node* node);
+void SetCssFocusNode(const Node* node);
 void SetCssViewport(float w, float h);
 std::string SerializeStylesheet(const Stylesheet& sheet);
 std::string SerializeComputedStyle(const ComputedStyle& style);

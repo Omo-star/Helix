@@ -1,8 +1,11 @@
 #include "js/dom_bridge.h"
+#include "css/stylesheet.h"
 #include "html/parser.h"
 #include "network/fetcher.h"
 #include "network/cookies.h"
 #include <algorithm>
+#include <cmath>
+#include <map>
 #include <sstream>
 #include <chrono>
 #include <cstdio>
@@ -49,6 +52,17 @@ static std::unordered_map<Node*, std::vector<EventListener>> g_eventListeners;
 // addresses so the GC can mark them safely (rooting a stack local was a
 // use-after-return bug). Cleared per document in registerDom().
 static std::vector<std::unique_ptr<JsValue>> g_wrapperRoots;
+static std::vector<std::unique_ptr<JsValue>> g_observerRoots;
+
+struct MutationObserverEntry {
+    JsObject* observer = nullptr;
+    Node* target = nullptr;
+    bool active = false;
+    bool subtree = false;
+    bool attributes = true;
+    bool childList = true;
+};
+static std::vector<MutationObserverEntry> g_mutationObservers;
 
 static std::shared_ptr<Node> getShared(Node* raw) {
     auto it = g_nodeStore.find(raw);
@@ -60,6 +74,170 @@ Node* unwrapNode(JsValue val) {
     if (!val.isObject()) return nullptr;
     return static_cast<Node*>(val.asObject()->domNode);
 }
+
+static std::string textContent(Node* n);
+
+static std::string trimCopy(std::string s) {
+    size_t b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return "";
+    size_t e = s.find_last_not_of(" \t\r\n");
+    return s.substr(b, e - b + 1);
+}
+
+static std::string lowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    return s;
+}
+
+static bool hasAttr(const Node* n, const std::string& name) {
+    return n && n->attrs.find(name) != n->attrs.end();
+}
+
+static float parseFloatOr(const std::string& s, float fallback) {
+    if (s.empty()) return fallback;
+    try {
+        size_t consumed = 0;
+        float v = std::stof(s, &consumed);
+        return consumed > 0 ? v : fallback;
+    } catch (...) {
+        return fallback;
+    }
+}
+
+static std::map<std::string, std::string> parseStyleMap(const std::string& raw) {
+    std::map<std::string, std::string> out;
+    std::istringstream ss(raw);
+    std::string decl;
+    while (std::getline(ss, decl, ';')) {
+        size_t pos = decl.find(':');
+        if (pos == std::string::npos) continue;
+        std::string key = lowerCopy(trimCopy(decl.substr(0, pos)));
+        std::string val = trimCopy(decl.substr(pos + 1));
+        if (!key.empty()) out[key] = val;
+    }
+    return out;
+}
+
+static std::string numberCss(float v) {
+    if (std::fabs(v - std::round(v)) < 0.01f) return std::to_string((int)std::round(v));
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.3f", v);
+    std::string s = buf;
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+static std::string pxCss(float v) {
+    return numberCss(v) + "px";
+}
+
+static std::string colorCss(const CssColor& c) {
+    if (!c.valid) return "";
+    int r = (int)std::round(std::clamp(c.r, 0.f, 1.f) * 255.f);
+    int g = (int)std::round(std::clamp(c.g, 0.f, 1.f) * 255.f);
+    int b = (int)std::round(std::clamp(c.b, 0.f, 1.f) * 255.f);
+    if (c.a < 0.999f) return "rgba(" + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b) + ", " + numberCss(c.a) + ")";
+    return "rgb(" + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b) + ")";
+}
+
+static std::string defaultDisplayForTag(const Node* n) {
+    if (!n || n->type != NodeType::Element) return "";
+    const std::string& t = n->tagName;
+    if (t == "span" || t == "a" || t == "b" || t == "strong" || t == "i"
+        || t == "em" || t == "small" || t == "label") return "inline";
+    if (t == "script" || t == "style" || t == "template" || (t == "dialog" && !hasAttr(n, "open"))) return "none";
+    return "block";
+}
+
+static std::string displayName(const ComputedStyle& s, const Node* n) {
+    switch (s.display) {
+        case 1: return "block";
+        case 2: return "inline";
+        case 3: return "none";
+        case 4: return "flex";
+        case 5: return "table";
+        case 6: return "table-cell";
+        case 7: return "inline-block";
+        case 8: return "list-item";
+        case 9: return "table-row";
+        case 10: return "table-row-group";
+        case 11: return "grid";
+        case 12: return "flow-root";
+        case 13: return "contents";
+        default: return defaultDisplayForTag(n);
+    }
+}
+
+static std::string positionName(const ComputedStyle& s) {
+    switch (s.positionMode) {
+        case 1: return "relative";
+        case 2: return "absolute";
+        case 3: return "fixed";
+        default: return "static";
+    }
+}
+
+static std::string overflowName(const ComputedStyle& s) {
+    switch (s.overflowMode) {
+        case 1: return "hidden";
+        case 2: return "auto";
+        case 3: return "scroll";
+        default: return "visible";
+    }
+}
+
+struct DomMetrics {
+    float left = 0;
+    float top = 0;
+    float width = 0;
+    float height = 0;
+};
+
+static DomMetrics computeDomMetrics(Node* n) {
+    DomMetrics m;
+    if (!n || n->type != NodeType::Element) return m;
+    ComputedStyle s = ParseInlineStyle(n->attr("style"));
+    ResolveStyleVariables(s);
+    if (s.display == 3 || (n->tagName == "dialog" && !hasAttr(n, "open"))) return m;
+
+    m.width = s.width >= 0 ? s.width : parseFloatOr(n->attr("width"), -1.f);
+    m.height = s.height >= 0 ? s.height : parseFloatOr(n->attr("height"), -1.f);
+
+    if (m.width < 0) {
+        std::string text = textContent(n);
+        m.width = text.empty() ? 0.f : std::max(16.f, (float)text.size() * 8.f);
+        if (!text.empty()) m.width += 8.f;
+    }
+    if (m.height < 0) {
+        m.height = !textContent(n).empty() ? std::max(16.f, s.lineHeight > 0 ? s.lineHeight : 16.f) : 0.f;
+    }
+
+    float padX = std::max(0.f, s.paddingLeft) + std::max(0.f, s.paddingRight);
+    float padY = std::max(0.f, s.paddingTop) + std::max(0.f, s.paddingBottom);
+    float borderX = std::max(0.f, s.borderLeftWidth >= 0 ? s.borderLeftWidth : s.borderWidth)
+                  + std::max(0.f, s.borderRightWidth >= 0 ? s.borderRightWidth : s.borderWidth);
+    float borderY = std::max(0.f, s.borderTopWidth >= 0 ? s.borderTopWidth : s.borderWidth)
+                  + std::max(0.f, s.borderBottomWidth >= 0 ? s.borderBottomWidth : s.borderWidth);
+    if (s.boxSizing != 1) {
+        m.width += padX + borderX;
+        m.height += padY + borderY;
+    }
+    if (s.leftSet && !s.leftPercent) m.left = s.left;
+    if (s.topSet && !s.topPercent) m.top = s.top;
+    if (s.transformSet) {
+        if (!s.transformTxPercent) m.left += s.transformTx;
+        if (!s.transformTyPercent) m.top += s.transformTy;
+        if (s.transformScale > 0) {
+            m.width *= s.transformScale;
+            m.height *= s.transformScale;
+        }
+    }
+    return m;
+}
+
+static void markDomDirty(VM& vm, Node* target, const std::string& type);
 
 // ── Build the text content of a subtree ──────────────────────────────────────
 
@@ -84,6 +262,42 @@ static std::string textContent(Node* n) {
 
 static std::string innerHTML(VM& vm, Node* n);
 static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materializeRelations);
+
+static bool observerCoversNode(const MutationObserverEntry& entry, Node* target) {
+    if (!entry.active || !entry.target || !target) return false;
+    if (entry.target == target) return true;
+    if (!entry.subtree) return false;
+    for (Node* cur = target->parent; cur; cur = cur->parent)
+        if (cur == entry.target) return true;
+    return false;
+}
+
+static void notifyMutationObservers(VM& vm, Node* target, const std::string& type) {
+    for (auto& entry : g_mutationObservers) {
+        if (!observerCoversNode(entry, target)) continue;
+        if (type == "attributes" && !entry.attributes) continue;
+        if (type == "childList" && !entry.childList) continue;
+        JsValue callback = entry.observer ? entry.observer->getProp("_callback") : JsValue::undefined();
+        if (!callback.isCallable()) continue;
+
+        auto* record = vm.gc().newObject(ObjKind::Plain);
+        record->setProp("type", vm.str(type));
+        auto shared = getShared(target);
+        record->setProp("target", shared ? wrapNode(vm, shared) : JsValue::null());
+        auto* records = vm.gc().newArray();
+        records->arrayPush(JsValue::object(record));
+        try {
+            vm.call(callback, JsValue::undefined(), { JsValue::object(records), JsValue::object(entry.observer) });
+        } catch (...) {
+        }
+    }
+}
+
+static void markDomDirty(VM& vm, Node* target, const std::string& type) {
+    vm.domDirty = true;
+    notifyMutationObservers(vm, target, type);
+    if (vm.onDomDirty) vm.onDomDirty();
+}
 
 static bool CanEagerSerialize(Node* n) {
     if (!n) return false;
@@ -237,13 +451,26 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             }
         }
         // setProperty / removeProperty helpers
-        vm.gc().newNativeFunction([](VM& vm2, JsValue t, std::vector<JsValue> a) -> JsValue {
+        addNative(vm, style, "setProperty", [](VM& vm2, JsValue t, std::vector<JsValue> a) -> JsValue {
             if (!t.isObject()) return JsValue::undefined();
             std::string prop = a.size()>0?a[0].toString():"";
             std::string val  = a.size()>1?a[1].toString():"";
-            t.asObject()->setProp(prop, vm2.str(val));
+            if (!prop.empty()) {
+                t.asObject()->setProp(prop, vm2.str(val));
+                if (t.asObject()->domNode && vm2.onDomPropSet)
+                    vm2.onDomPropSet(t.asObject(), prop, vm2.str(val));
+            }
             return JsValue::undefined();
-        }, "setProperty");
+        });
+        addNative(vm, style, "removeProperty", [](VM& vm2, JsValue t, std::vector<JsValue> a) -> JsValue {
+            if (!t.isObject() || a.empty()) return JsValue::undefined();
+            std::string prop = a[0].toString();
+            JsValue old = t.asObject()->getProp(prop);
+            t.asObject()->props.erase(prop);
+            if (t.asObject()->domNode && vm2.onDomPropSet)
+                vm2.onDomPropSet(t.asObject(), prop, vm2.str(""));
+            return old;
+        });
         obj->setProp("style", JsValue::object(style));
     }
 
@@ -263,13 +490,13 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* n = unwrapNode(thisVal);
         if (!n || args.size() < 2) return JsValue::undefined();
         n->attrs[args[0].toString()] = args[1].toString();
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n, "attributes");
         return JsValue::undefined();
     });
     addNativeM("removeAttribute", NATIVE("removeAttribute") {
         Node* n = unwrapNode(thisVal);
         if (n && !args.empty()) n->attrs.erase(args[0].toString());
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n, "attributes");
         return JsValue::undefined();
     });
     addNativeM("hasAttribute", NATIVE("hasAttribute") {
@@ -290,7 +517,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             for (auto& a : args) { std::string t = a.toString();
                 if (!t.empty() && !classHas(toks, t)) toks.push_back(t); }
             n->attrs["class"] = classJoin(toks);
-            vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+            markDomDirty(vm, n, "attributes");
             return JsValue::undefined();
         });
         addNative(vm, cl, "remove", NATIVE("classList_remove") {
@@ -300,7 +527,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             for (auto& a : args) { std::string t = a.toString();
                 toks.erase(std::remove(toks.begin(), toks.end(), t), toks.end()); }
             n->attrs["class"] = classJoin(toks);
-            vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+            markDomDirty(vm, n, "attributes");
             return JsValue::undefined();
         });
         addNative(vm, cl, "toggle", NATIVE("classList_toggle") {
@@ -313,7 +540,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             if (want && !has) toks.push_back(t);
             else if (!want && has) toks.erase(std::remove(toks.begin(), toks.end(), t), toks.end());
             n->attrs["class"] = classJoin(toks);
-            vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+            markDomDirty(vm, n, "attributes");
             return JsValue::boolean(want);
         });
         addNative(vm, cl, "contains", NATIVE("classList_contains") {
@@ -416,16 +643,18 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         obj->setProp("dataset", JsValue::object(ds));
     }
 
-    // Layout dimension stubs (sites read these to check visibility/size).
-    obj->setProp("offsetWidth",  JsValue::integer(0));
-    obj->setProp("offsetHeight", JsValue::integer(0));
-    obj->setProp("offsetTop",    JsValue::integer(0));
-    obj->setProp("offsetLeft",   JsValue::integer(0));
+    // Layout dimensions. The JS bridge does not own the renderer's box tree,
+    // but inline CSS/HTML dimensions are enough for many visibility checks.
+    DomMetrics metrics = computeDomMetrics(raw);
+    obj->setProp("offsetWidth",  JsValue::integer((int32_t)std::round(metrics.width)));
+    obj->setProp("offsetHeight", JsValue::integer((int32_t)std::round(metrics.height)));
+    obj->setProp("offsetTop",    JsValue::integer((int32_t)std::round(metrics.top)));
+    obj->setProp("offsetLeft",   JsValue::integer((int32_t)std::round(metrics.left)));
     obj->setProp("offsetParent", JsValue::null());
-    obj->setProp("clientWidth",  JsValue::integer(0));
-    obj->setProp("clientHeight", JsValue::integer(0));
-    obj->setProp("scrollWidth",  JsValue::integer(0));
-    obj->setProp("scrollHeight", JsValue::integer(0));
+    obj->setProp("clientWidth",  JsValue::integer((int32_t)std::round(metrics.width)));
+    obj->setProp("clientHeight", JsValue::integer((int32_t)std::round(metrics.height)));
+    obj->setProp("scrollWidth",  JsValue::integer((int32_t)std::round(metrics.width)));
+    obj->setProp("scrollHeight", JsValue::integer((int32_t)std::round(metrics.height)));
     obj->setProp("scrollTop",    JsValue::integer(0));
     obj->setProp("scrollLeft",   JsValue::integer(0));
 
@@ -436,7 +665,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* child = unwrapNode(ARG(0));
         if (!child) return ARG(0);
         auto childShared = getShared(child);
-        if (childShared) { n->appendChild(childShared); vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty(); }
+        if (childShared) { n->appendChild(childShared); markDomDirty(vm, n, "childList"); }
         return ARG(0);
     });
     addNativeM("removeChild", NATIVE("removeChild") {
@@ -446,7 +675,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         if (!child) return ARG(0);
         auto& ch = n->children;
         ch.erase(std::remove_if(ch.begin(), ch.end(), [&](auto& c){ return c.get()==child; }), ch.end());
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n, "childList");
         return ARG(0);
     });
     addNativeM("insertBefore", NATIVE("insertBefore") {
@@ -462,7 +691,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             auto it = std::find_if(ch.begin(), ch.end(), [&](auto& c){ return c.get()==ref; });
             if (it != ch.end()) ch.insert(it, childShared);
         }
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n, "childList");
         return ARG(0);
     });
     addNativeM("replaceChild", NATIVE("replaceChild") {
@@ -474,7 +703,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         for (auto& c : n->children) {
             if (c.get() == oldNode) { c = newShared; break; }
         }
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n, "childList");
         return ARG(1);
     });
     addNativeM("cloneNode", NATIVE("cloneNode") {
@@ -591,36 +820,49 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         return JsValue::null();
     });
 
-    // Geometry stubs
     addNativeM("getBoundingClientRect", NATIVE("getBoundingClientRect") {
+        Node* n = unwrapNode(thisVal);
+        DomMetrics rect = computeDomMetrics(n);
         auto* r = vm.gc().newObject(ObjKind::Plain);
-        r->setProp("top",    JsValue::integer(0));
-        r->setProp("left",   JsValue::integer(0));
-        r->setProp("bottom", JsValue::integer(0));
-        r->setProp("right",  JsValue::integer(0));
-        r->setProp("width",  JsValue::integer(0));
-        r->setProp("height", JsValue::integer(0));
-        r->setProp("x",      JsValue::integer(0));
-        r->setProp("y",      JsValue::integer(0));
+        r->setProp("top",    JsValue::number(rect.top));
+        r->setProp("left",   JsValue::number(rect.left));
+        r->setProp("bottom", JsValue::number(rect.top + rect.height));
+        r->setProp("right",  JsValue::number(rect.left + rect.width));
+        r->setProp("width",  JsValue::number(rect.width));
+        r->setProp("height", JsValue::number(rect.height));
+        r->setProp("x",      JsValue::number(rect.left));
+        r->setProp("y",      JsValue::number(rect.top));
         return JsValue::object(r);
     });
     addNativeM("scrollIntoView", NATIVE("scrollIntoView") { return JsValue::undefined(); });
-    addNativeM("focus",  NATIVE("focus")  { return JsValue::undefined(); });
-    addNativeM("blur",   NATIVE("blur")   { return JsValue::undefined(); });
+    addNativeM("focus",  NATIVE("focus")  {
+        if (Node* n = unwrapNode(thisVal)) {
+            SetCssFocusNode(n);
+            markDomDirty(vm, n, "attributes");
+        }
+        return JsValue::undefined();
+    });
+    addNativeM("blur",   NATIVE("blur")   {
+        if (Node* n = unwrapNode(thisVal)) {
+            SetCssFocusNode(nullptr);
+            markDomDirty(vm, n, "attributes");
+        }
+        return JsValue::undefined();
+    });
     addNativeM("click",  NATIVE("click")  { return JsValue::undefined(); });
     addNativeM("remove", NATIVE("remove") {
         Node* n = unwrapNode(thisVal);
         if (!n || !n->parent) return JsValue::undefined();
         auto& ch = n->parent->children;
         ch.erase(std::remove_if(ch.begin(), ch.end(), [&](auto& c){ return c.get()==n; }), ch.end());
-        vm.domDirty = true; if (vm.onDomDirty) vm.onDomDirty();
+        markDomDirty(vm, n->parent, "childList");
         return JsValue::undefined();
     });
 
     // value / checked for form elements
     obj->setProp("value",   vm.str(node->attr("value")));
-    obj->setProp("checked", JsValue::boolean(node->attr("checked") == "checked"));
-    obj->setProp("disabled",JsValue::boolean(node->attr("disabled") == "disabled"));
+    obj->setProp("checked", JsValue::boolean(hasAttr(raw, "checked")));
+    obj->setProp("disabled",JsValue::boolean(hasAttr(raw, "disabled")));
     obj->setProp("href",    vm.str(node->attr("href")));
     obj->setProp("src",     vm.str(node->attr("src")));
     obj->setProp("alt",     vm.str(node->attr("alt")));
@@ -661,6 +903,66 @@ static void rebuildStyleAttr(Node* n, JsObject* styleObj) {
     n->attrs["style"] = s;
 }
 
+static std::string cssCamel(const std::string& key) {
+    std::string out;
+    bool upper = false;
+    for (char c : key) {
+        if (c == '-') { upper = true; continue; }
+        out += upper ? (char)std::toupper((unsigned char)c) : c;
+        upper = false;
+    }
+    return out;
+}
+
+static std::map<std::string, std::string> computedStyleMap(Node* n) {
+    std::map<std::string, std::string> props;
+    if (!n) return props;
+    auto raw = parseStyleMap(n->attr("style"));
+    ComputedStyle s = ParseInlineStyle(n->attr("style"));
+    ResolveStyleVariables(s);
+
+    auto set = [&](const std::string& kebab, const std::string& val) {
+        props[kebab] = val;
+        props[cssCamel(kebab)] = val;
+    };
+    auto rawOr = [&](const std::string& key, const std::string& fallback) {
+        auto it = raw.find(key);
+        return it != raw.end() ? it->second : fallback;
+    };
+
+    set("display", rawOr("display", displayName(s, n)));
+    set("position", rawOr("position", positionName(s)));
+    set("visibility", rawOr("visibility", s.visibilityHidden ? "hidden" : "visible"));
+    set("overflow", rawOr("overflow", overflowName(s)));
+    set("width", rawOr("width", s.width >= 0 ? pxCss(s.width) : ""));
+    set("height", rawOr("height", s.height >= 0 ? pxCss(s.height) : ""));
+    set("margin-top", rawOr("margin-top", s.marginTopSet() ? pxCss(s.marginTop) : "0px"));
+    set("margin-right", rawOr("margin-right", s.marginRightSet() ? pxCss(s.marginRight) : "0px"));
+    set("margin-bottom", rawOr("margin-bottom", s.marginBottomSet() ? pxCss(s.marginBottom) : "0px"));
+    set("margin-left", rawOr("margin-left", s.marginLeftSet() ? pxCss(s.marginLeft) : "0px"));
+    set("padding-top", rawOr("padding-top", s.paddingTop >= 0 ? pxCss(s.paddingTop) : "0px"));
+    set("padding-right", rawOr("padding-right", s.paddingRight >= 0 ? pxCss(s.paddingRight) : "0px"));
+    set("padding-bottom", rawOr("padding-bottom", s.paddingBottom >= 0 ? pxCss(s.paddingBottom) : "0px"));
+    set("padding-left", rawOr("padding-left", s.paddingLeft >= 0 ? pxCss(s.paddingLeft) : "0px"));
+    set("color", rawOr("color", colorCss(s.color)));
+    set("background-color", rawOr("background-color", s.bgColorSet ? colorCss(s.bgColor) : "rgba(0, 0, 0, 0)"));
+    set("background-image", rawOr("background-image", s.backgroundImageSet ? "url(" + s.backgroundImage + ")" : "none"));
+    set("font-size", rawOr("font-size", s.fontSize > 0 ? pxCss(s.fontSize) : "16px"));
+    set("font-family", rawOr("font-family", s.fontFamily));
+    set("font-weight", rawOr("font-weight", s.bold ? "700" : "400"));
+    set("opacity", rawOr("opacity", numberCss(s.opacity)));
+    set("z-index", rawOr("z-index", s.zIndexSet ? std::to_string(s.zIndex) : "auto"));
+    set("top", rawOr("top", s.topSet && !s.topPercent ? pxCss(s.top) : "auto"));
+    set("left", rawOr("left", s.leftSet && !s.leftPercent ? pxCss(s.left) : "auto"));
+    set("right", rawOr("right", s.rightSet && !s.rightPercent ? pxCss(s.right) : "auto"));
+    set("bottom", rawOr("bottom", s.bottomSet && !s.bottomPercent ? pxCss(s.bottom) : "auto"));
+    set("transform", rawOr("transform", s.transformSet ? "matrix(1, 0, 0, 1, " + numberCss(s.transformTx) + ", " + numberCss(s.transformTy) + ")" : "none"));
+    set("transition", rawOr("transition", s.transitionSet ? s.transitionProperty + " " + numberCss(s.transitionDuration) + "s" : ""));
+
+    for (const auto& [key, val] : raw) set(key, val);
+    return props;
+}
+
 // Replace a node's children with the parsed contents of an HTML fragment.
 static void setInnerHtml(Node* parent, const std::string& html) {
     if (!parent) return;
@@ -688,7 +990,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     vm.onDomDirty = onRepaint;
 
     // Reflect live JS property writes onto the backing DOM node.
-    vm.onDomPropSet = [](JsObject* wrapper, const std::string& key, JsValue val) {
+    vm.onDomPropSet = [vmPtr = &vm](JsObject* wrapper, const std::string& key, JsValue val) {
         Node* n = static_cast<Node*>(wrapper->domNode);
         if (!n) return;
         // A Plain object carrying a domNode is the style object (reflect CSS) or
@@ -696,11 +998,19 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         if (wrapper->kind != ObjKind::DomWrapper) {
             if (wrapper->hasOwn("toggle")) return;   // classList, not a style obj
             rebuildStyleAttr(n, wrapper);
+            markDomDirty(*vmPtr, n, "attributes");
             return;
         }
         if (key == "className" || key == "class") n->attrs["class"] = val.toString();
         else if (key == "id")    n->attrs["id"] = val.toString();
         else if (key == "value") n->attrs["value"] = val.toString();
+        else if (key == "checked") {
+            if (val.toBool()) n->attrs["checked"] = "checked";
+            else n->attrs.erase("checked");
+        } else if (key == "disabled") {
+            if (val.toBool()) n->attrs["disabled"] = "disabled";
+            else n->attrs.erase("disabled");
+        }
         else if (key == "textContent" || key == "innerText") {
             n->children.clear();
             std::string t = val.toString();
@@ -708,18 +1018,21 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         } else if (key == "innerHTML") {
             setInnerHtml(n, val.toString());
         }
+        markDomDirty(*vmPtr, n, (key == "textContent" || key == "innerText" || key == "innerHTML") ? "childList" : "attributes");
     };
 
     // Symmetric live getter: keep className/id/value reads in sync with the node
     // after classList/setAttribute mutations (a stale snapshot otherwise clobbers
     // on read-modify-write, e.g. el.className += ' x').
-    vm.onDomPropGet = [&vm](JsObject* wrapper, const std::string& key, JsValue& out) -> bool {
+    vm.onDomPropGet = [vmPtr = &vm](JsObject* wrapper, const std::string& key, JsValue& out) -> bool {
         if (wrapper->kind != ObjKind::DomWrapper) return false;
         Node* n = static_cast<Node*>(wrapper->domNode);
         if (!n) return false;
-        if (key == "className") { out = vm.str(n->attr("class")); return true; }
-        if (key == "id")        { out = vm.str(n->attr("id"));    return true; }
-        if (key == "value")     { out = vm.str(n->attr("value")); return true; }
+        if (key == "className") { out = vmPtr->str(n->attr("class")); return true; }
+        if (key == "id")        { out = vmPtr->str(n->attr("id"));    return true; }
+        if (key == "value")     { out = vmPtr->str(n->attr("value")); return true; }
+        if (key == "checked")   { out = JsValue::boolean(hasAttr(n, "checked")); return true; }
+        if (key == "disabled")  { out = JsValue::boolean(hasAttr(n, "disabled")); return true; }
         return false;
     };
 
@@ -728,21 +1041,29 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     g_wrapperRoots.clear();
     g_wrapperStore.clear();
     g_eventListeners.clear();
+    for (auto& r : g_observerRoots) vm.gc().removeRoot(r.get());
+    g_observerRoots.clear();
+    g_mutationObservers.clear();
 
     JsValue docVal = wrapNode(vm, docNode);
     vm.setGlobal("document", docVal);
 
     // document.body / document.head / document.documentElement
     auto findFirst = [&](const std::string& tag) -> JsValue {
-        std::function<JsValue(Node*)> find = [&](Node* n) -> JsValue {
-            for (auto& c : n->children) {
-                if (c->tagName == tag) return wrapNode(vm, c);
-                JsValue r = find(c.get());
-                if (!r.isNull()) return r;
+        std::vector<Node*> stack;
+        stack.push_back(docNode.get());
+        while (!stack.empty()) {
+            Node* n = stack.back();
+            stack.pop_back();
+            if (!n) continue;
+            if (n->tagName == tag) {
+                auto shared = getShared(n);
+                return shared ? wrapNode(vm, shared) : JsValue::null();
             }
-            return JsValue::null();
-        };
-        return find(docNode.get());
+            for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
+                stack.push_back(it->get());
+        }
+        return JsValue::null();
     };
 
     if (docVal.isObject()) {
@@ -829,19 +1150,21 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     vm.setGlobal("scrollY",     JsValue::integer(0));
     vm.setGlobal("devicePixelRatio", JsValue::number(1.0));
 
-    // getComputedStyle(element) — returns a stub object with getPropertyValue().
+    // getComputedStyle(element): lightweight CSSOM from inline style + defaults.
     vm.setGlobal("getComputedStyle", JsValue::object(vm.gc().newNativeFunction(
         NATIVE("getComputedStyle") {
+            Node* n = unwrapNode(ARG(0));
             auto* style = vm.gc().newObject(ObjKind::Plain);
+            auto props = computedStyleMap(n);
+            for (const auto& [key, val] : props) style->setProp(key, vm.str(val));
             addNative(vm, style, "getPropertyValue", NATIVE("getPropertyValue") {
-                return vm.str("");
+                if (!thisVal.isObject() || args.empty()) return vm.str("");
+                std::string key = lowerCopy(trimCopy(ARG_STR(0)));
+                JsValue direct = thisVal.asObject()->getProp(key);
+                if (!direct.isUndefined()) return direct;
+                JsValue camel = thisVal.asObject()->getProp(cssCamel(key));
+                return camel.isUndefined() ? vm.str("") : camel;
             });
-            // Common style properties — return empty string (sites just check for existence).
-            const char* common[] = { "display","position","visibility","overflow",
-                "width","height","margin","padding","color","backgroundColor",
-                "fontSize","fontFamily","fontWeight","opacity","zIndex",
-                "top","left","right","bottom","transform","transition" };
-            for (auto* p : common) style->setProp(p, vm.str(""));
             return JsValue::object(style);
         }, "getComputedStyle")));
 
@@ -990,27 +1313,100 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     vm.setGlobal("cancelAnimationFrame", JsValue::object(vm.gc().newNativeFunction(
         NATIVE("cancelAnimationFrame") { return JsValue::undefined(); }, "cancelAnimationFrame")));
 
-    // MutationObserver (stub)
     vm.setGlobal("MutationObserver", JsValue::object(vm.gc().newNativeFunction(
         NATIVE("MutationObserver") {
             auto* obs = vm.gc().newObject(ObjKind::Plain);
-            addNative(vm, obs, "observe",    NATIVE("obs_observe")    { return JsValue::undefined(); });
-            addNative(vm, obs, "disconnect", NATIVE("obs_disconnect") { return JsValue::undefined(); });
-            return JsValue::object(obs);
+            obs->setProp("_callback", ARG(0));
+            g_mutationObservers.push_back({ obs, nullptr, false, false, true, true });
+            JsValue obsVal = JsValue::object(obs);
+            g_observerRoots.push_back(std::make_unique<JsValue>(obsVal));
+            vm.gc().addRoot(g_observerRoots.back().get());
+            addNative(vm, obs, "observe", NATIVE("obs_observe") {
+                if (!thisVal.isObject()) return JsValue::undefined();
+                Node* target = unwrapNode(ARG(0));
+                for (auto& entry : g_mutationObservers) {
+                    if (entry.observer != thisVal.asObject()) continue;
+                    entry.target = target;
+                    entry.active = target != nullptr;
+                    if (ARG(1).isObject()) {
+                        auto* options = ARG(1).asObject();
+                        JsValue subtree = options->getProp("subtree");
+                        JsValue attributes = options->getProp("attributes");
+                        JsValue childList = options->getProp("childList");
+                        if (!subtree.isUndefined()) entry.subtree = subtree.toBool();
+                        if (!attributes.isUndefined()) entry.attributes = attributes.toBool();
+                        if (!childList.isUndefined()) entry.childList = childList.toBool();
+                    }
+                    break;
+                }
+                return JsValue::undefined();
+            });
+            addNative(vm, obs, "disconnect", NATIVE("obs_disconnect") {
+                if (!thisVal.isObject()) return JsValue::undefined();
+                for (auto& entry : g_mutationObservers)
+                    if (entry.observer == thisVal.asObject()) entry.active = false;
+                return JsValue::undefined();
+            });
+            return obsVal;
         }, "MutationObserver")));
 
-    // IntersectionObserver (stub)
     vm.setGlobal("IntersectionObserver", JsValue::object(vm.gc().newNativeFunction(
         NATIVE("IntersectionObserver") {
             auto* obs = vm.gc().newObject(ObjKind::Plain);
-            addNative(vm, obs, "observe",    NATIVE("io_observe")    { return JsValue::undefined(); });
+            obs->setProp("_callback", ARG(0));
+            addNative(vm, obs, "observe", NATIVE("io_observe") {
+                if (!thisVal.isObject()) return JsValue::undefined();
+                JsValue callback = thisVal.asObject()->getProp("_callback");
+                if (!callback.isCallable()) return JsValue::undefined();
+                Node* target = unwrapNode(ARG(0));
+                DomMetrics rect = computeDomMetrics(target);
+                auto* bounds = vm.gc().newObject(ObjKind::Plain);
+                bounds->setProp("top", JsValue::number(rect.top));
+                bounds->setProp("left", JsValue::number(rect.left));
+                bounds->setProp("bottom", JsValue::number(rect.top + rect.height));
+                bounds->setProp("right", JsValue::number(rect.left + rect.width));
+                bounds->setProp("width", JsValue::number(rect.width));
+                bounds->setProp("height", JsValue::number(rect.height));
+                auto* record = vm.gc().newObject(ObjKind::Plain);
+                record->setProp("target", ARG(0));
+                record->setProp("isIntersecting", JsValue::boolean(true));
+                record->setProp("intersectionRatio", JsValue::number(1.0));
+                record->setProp("boundingClientRect", JsValue::object(bounds));
+                auto* records = vm.gc().newArray();
+                records->arrayPush(JsValue::object(record));
+                try { vm.call(callback, JsValue::undefined(), { JsValue::object(records), thisVal }); } catch (...) {}
+                return JsValue::undefined();
+            });
             addNative(vm, obs, "unobserve",  NATIVE("io_unobserve")  { return JsValue::undefined(); });
             addNative(vm, obs, "disconnect", NATIVE("io_disconnect") { return JsValue::undefined(); });
             return JsValue::object(obs);
         }, "IntersectionObserver")));
 
-    // ResizeObserver (stub)
-    vm.setGlobal("ResizeObserver", vm.getGlobal("MutationObserver"));
+    vm.setGlobal("ResizeObserver", JsValue::object(vm.gc().newNativeFunction(
+        NATIVE("ResizeObserver") {
+            auto* obs = vm.gc().newObject(ObjKind::Plain);
+            obs->setProp("_callback", ARG(0));
+            addNative(vm, obs, "observe", NATIVE("ro_observe") {
+                if (!thisVal.isObject()) return JsValue::undefined();
+                JsValue callback = thisVal.asObject()->getProp("_callback");
+                if (!callback.isCallable()) return JsValue::undefined();
+                Node* target = unwrapNode(ARG(0));
+                DomMetrics rect = computeDomMetrics(target);
+                auto* size = vm.gc().newObject(ObjKind::Plain);
+                size->setProp("inlineSize", JsValue::number(rect.width));
+                size->setProp("blockSize", JsValue::number(rect.height));
+                auto* record = vm.gc().newObject(ObjKind::Plain);
+                record->setProp("target", ARG(0));
+                record->setProp("contentRect", JsValue::object(size));
+                auto* records = vm.gc().newArray();
+                records->arrayPush(JsValue::object(record));
+                try { vm.call(callback, JsValue::undefined(), { JsValue::object(records), thisVal }); } catch (...) {}
+                return JsValue::undefined();
+            });
+            addNative(vm, obs, "unobserve",  NATIVE("ro_unobserve")  { return JsValue::undefined(); });
+            addNative(vm, obs, "disconnect", NATIVE("ro_disconnect") { return JsValue::undefined(); });
+            return JsValue::object(obs);
+        }, "ResizeObserver")));
 
     // CustomEvent / Event
     auto makeEventCtor = [&](const char* name) {

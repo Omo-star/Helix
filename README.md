@@ -19,17 +19,20 @@ native shell on each platform.
 - **HTML**: tokenizer with 170+ named entities, tree-construction parser with implicit
   element creation, auto-close rules, foster parenting, scope-aware end tags, and
   formatting element adoption (864 lines)
-- **CSS**: 90+ properties, cascade with combinators and attribute selectors, custom
-  properties (`var()`), media queries, `calc()`/`clamp()`/`min()`/`max()`, viewport
+- **CSS**: 90+ properties, cascade with combinators, attribute selectors,
+  `:is()`/`:where()`, `@supports`, custom properties (`var()`), media queries,
+  `calc()`/`clamp()`/`min()`/`max()`, viewport
   units, `box-sizing`, `object-fit`, flexbox (wrap/shrink/basis/align-self), grid,
   tables, floats, positioning with percentage offsets, `text-align` (incl. justify),
   `text-indent`, `text-decoration`, `vertical-align`, `linear-gradient()`,
   `box-shadow`, `transform` (translate/scale/rotate), `overflow: auto/scroll`,
-  `:hover`/`:nth-child()`/`:not()`/`~` selectors, and more
+  `:hover`/`:focus`/`:checked`/`:disabled`/`:enabled`, `:nth-child()`, `:not()`,
+  and `~` selectors, and more
 - **JavaScript**: lexer, parser, bytecode compiler, VM with 260+ native functions.
   Supports classes, destructuring, template literals, `async`/`await`, optional
   chaining (`?.`), nullish coalescing (`??`), `for...of`, real RegExp via `<regex>`,
-  `fetch()`, `addEventListener` with event bubbling, and external `<script src>` loading
+  `fetch()`, `getComputedStyle()`, DOM geometry APIs, observer APIs, `addEventListener`
+  with event bubbling, and external `<script src>` loading
 - **SVG**: basic renderer for rect, circle, ellipse, line, path (cubic/quadratic bezier),
   polygon with scanline fill
 - **Layout**: block, inline (with line breaking), float, table (auto column sizing),
@@ -101,6 +104,7 @@ update is ready to apply it instantly.
 | Ctrl+T / Ctrl+W | New / close tab |
 | Ctrl+R / F5 | Reload |
 | Ctrl+F | Find in page |
+| Ctrl+G / Ctrl+Shift+G | Find next / previous |
 | Ctrl++/- | Zoom in/out |
 | Alt+Left/Right | Back / forward |
 | F12 | Apply pending update |
@@ -112,6 +116,8 @@ build\Release\helix-tests.exe html
 build\Release\helix-tests.exe css
 build\Release\helix-tests.exe layout
 build\Release\helix-tests.exe paint
+build\Release\helix-tests.exe js
+build\Release\helix-tests.exe network
 ```
 
 Fixtures live under `tests/fixtures`. Each has an input file and an expected text
