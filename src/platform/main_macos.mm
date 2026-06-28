@@ -24,6 +24,7 @@
 
 static NSWindow* g_window;
 static NSTextField* g_urlField;
+static NSTextField* g_urlBadge;
 static NSTextField* g_statusField;
 static HelixView* g_view;
 
@@ -50,10 +51,27 @@ static NSColor* ThemeColor(helix::chrome_theme::Rgb c, CGFloat alpha = 1.0) {
                                      alpha:alpha];
 }
 
+static NSString* UrlBadgeText(const std::string& url) {
+    if (url.rfind("helix://", 0) == 0 || url.rfind("felix://", 0) == 0) return @"H";
+    if (url.rfind("https://", 0) == 0) return @"S";
+    if (url.rfind("http://", 0) == 0) return @"i";
+    return @"?";
+}
+
+static void SetUrlBadge(const std::string& url) {
+    if (g_urlBadge)
+        [g_urlBadge setStringValue:UrlBadgeText(url)];
+}
+
 static void StyleToolbarButton(NSButton* button) {
     if (!button) return;
     using namespace helix::chrome_theme;
-    [button setBezelStyle:NSBezelStyleRounded];
+    [button setBordered:NO];
+    [button setWantsLayer:YES];
+    button.layer.backgroundColor = [ThemeColor(Active) CGColor];
+    button.layer.borderColor = [ThemeColor(Line) CGColor];
+    button.layer.borderWidth = 1.0;
+    button.layer.cornerRadius = CornerRadius;
     [button setFont:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]];
     [button setTranslatesAutoresizingMaskIntoConstraints:NO];
     [[button widthAnchor] constraintEqualToConstant:ButtonWidth].active = YES;
@@ -321,9 +339,23 @@ int main(int argc, const char* argv[]) {
         [g_urlField setTextColor:ThemeColor(helix::chrome_theme::Ink)];
         [g_urlField setBackgroundColor:ThemeColor(helix::chrome_theme::Active)];
         [g_urlField setBezeled:YES];
+        [g_urlField setFocusRingType:NSFocusRingTypeExterior];
         [g_urlField setTranslatesAutoresizingMaskIntoConstraints:NO];
 
-        NSStackView* toolbar = [NSStackView stackViewWithViews:@[backBtn, fwdBtn, reloadBtn, homeBtn, g_urlField]];
+        g_urlBadge = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 24, helix::chrome_theme::ButtonHeight)];
+        [g_urlBadge setStringValue:@"H"];
+        [g_urlBadge setBezeled:NO];
+        [g_urlBadge setEditable:NO];
+        [g_urlBadge setSelectable:NO];
+        [g_urlBadge setDrawsBackground:NO];
+        [g_urlBadge setAlignment:NSTextAlignmentCenter];
+        [g_urlBadge setFont:[NSFont systemFontOfSize:13 weight:NSFontWeightBold]];
+        [g_urlBadge setTextColor:ThemeColor(helix::chrome_theme::Accent)];
+        [g_urlBadge setTranslatesAutoresizingMaskIntoConstraints:NO];
+        [[g_urlBadge widthAnchor] constraintEqualToConstant:24].active = YES;
+        [[g_urlBadge heightAnchor] constraintEqualToConstant:helix::chrome_theme::ButtonHeight].active = YES;
+
+        NSStackView* toolbar = [NSStackView stackViewWithViews:@[backBtn, fwdBtn, reloadBtn, homeBtn, g_urlBadge, g_urlField]];
         [toolbar setOrientation:NSUserInterfaceLayoutOrientationHorizontal];
         [toolbar setSpacing:helix::chrome_theme::Gap];
         [toolbar setEdgeInsets:NSEdgeInsetsMake(
@@ -352,6 +384,8 @@ int main(int argc, const char* argv[]) {
         [g_statusField setBackgroundColor:ThemeColor(helix::chrome_theme::Rail)];
         [g_statusField setFont:[NSFont systemFontOfSize:11]];
         [g_statusField setTextColor:ThemeColor(helix::chrome_theme::Quiet)];
+        [g_statusField setAlignment:NSTextAlignmentLeft];
+        [[g_statusField cell] setLineBreakMode:NSLineBreakByTruncatingTail];
         [g_statusField setTranslatesAutoresizingMaskIntoConstraints:NO];
 
         [contentView addSubview:toolbar];
@@ -380,6 +414,7 @@ int main(int argc, const char* argv[]) {
         };
         g_chrome.cb.setAddressText = [](const std::string& u) {
             if (g_urlField) [g_urlField setStringValue:[NSString stringWithUTF8String:u.c_str()]];
+            SetUrlBadge(u);
         };
         g_chrome.cb.setStatusText = [](const std::string& s) {
             if (g_statusField) [g_statusField setStringValue:[NSString stringWithUTF8String:s.c_str()]];

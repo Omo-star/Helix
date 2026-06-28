@@ -138,56 +138,77 @@ inline const std::string& HomePageHtml() {
 <style>
 body {
     font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #f0e9dc;
-    color: #4a4033;
+    background: #f5f6f8;
+    color: #17191f;
     margin: 0;
-    padding: 60px 0;
-    line-height: 1.6;
+    padding: 56px 0;
+    line-height: 1.45;
 }
-.w { width: 500px; margin-left: auto; margin-right: auto; }
-h1 { font-size: 40px; color: #2e2820; text-align: center; margin-bottom: 4px; }
-.accent { color: #b07d3c; }
-.sub { text-align: center; color: #6b5f4d; font-size: 15px; }
-.sub2 { text-align: center; color: #9a8b73; font-size: 13px; margin-top: 4px; }
-.links { padding: 30px 0; }
+.w { width: 720px; margin-left: auto; margin-right: auto; }
+.brand { text-align: center; margin-bottom: 26px; }
+.mark {
+    display: inline-block; background: #3b6df6; color: white;
+    border-radius: 10px; padding: 7px 13px; font-weight: 700;
+    letter-spacing: 0; font-size: 15px;
+}
+h1 { font-size: 44px; color: #17191f; text-align: center; margin: 14px 0 4px; }
+.sub { text-align: center; color: #8a93a5; font-size: 15px; margin: 0; }
+.search {
+    background: #ffffff; border: 1px solid #d1d6e0; border-radius: 10px;
+    padding: 15px 18px; margin: 24px 0 18px; color: #8a93a5;
+    font-size: 16px;
+}
+.search strong { color: #17191f; }
+.section-title {
+    color: #8a93a5; font-size: 12px; font-weight: 700;
+    margin: 22px 0 10px; text-transform: uppercase;
+}
+.links { padding: 0; }
 .links a {
-    display: block; background: #faf6ee; border: 1px solid #ddd2bd;
-    border-radius: 8px; padding: 14px 20px; margin: 8px 0;
-    text-decoration: none; color: #4a4033; font-size: 15px;
+    display: block; background: #ffffff; border: 1px solid #d1d6e0;
+    border-radius: 8px; padding: 14px 16px; margin: 8px 0;
+    text-decoration: none; color: #17191f; font-size: 15px;
 }
-.url { color: #9a8b73; font-size: 12px; }
-.sep { border-top: 1px solid #ddd2bd; padding-top: 20px; margin-top: 20px; }
-h3 { font-size: 13px; color: #b07d3c; margin-bottom: 12px; }
-.key { display: block; padding: 3px 0; color: #6b5f4d; font-size: 13px; }
-.key strong { color: #2e2820; }
-.ft { border-top: 1px solid #ddd2bd; margin-top: 30px; padding-top: 20px; text-align: center; }
-.ft p { font-size: 12px; color: #9a8b73; }
-.tag { background: #e8dcc4; color: #b07d3c; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
+.links a strong { color: #3b6df6; }
+.url { color: #8a93a5; font-size: 12px; }
+.shortcuts {
+    background: #e5e8ee; border-radius: 8px; padding: 14px 18px;
+    margin-top: 18px;
+}
+.key { display: block; padding: 4px 0; color: #5d6575; font-size: 13px; }
+.key strong { color: #17191f; }
+.ft { margin-top: 24px; text-align: center; }
+.ft p { font-size: 12px; color: #8a93a5; }
+.tag { background: #dde7ff; color: #3b6df6; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
 </style>
 </head>
 <body>
 <div class="w">
-<h1><span class="accent">&lt;</span>Helix<span class="accent">/&gt;</span></h1>
-<p class="sub">A web browser, built from scratch in C++</p>
-<p class="sub2">No Chromium. No WebView. No shortcuts.</p>
-<div class="links">
-<a href="https://en.wikipedia.org/wiki/Main_Page">Wikipedia <span class="url">en.wikipedia.org</span></a>
-<a href="https://news.ycombinator.com">Hacker News <span class="url">news.ycombinator.com</span></a>
-<a href="https://lite.cnn.com">CNN Lite <span class="url">lite.cnn.com</span></a>
-<a href="helix://history">History <span class="url">helix://history</span></a>
+<div class="brand">
+<span class="mark">HELIX</span>
+<h1>Start browsing</h1>
+<p class="sub">A from-scratch browser engine with its own HTML, CSS, JS, layout, and renderer.</p>
 </div>
-<div class="sep">
-<h3>SHORTCUTS</h3>
+<div class="search"><strong>Ctrl+L</strong> to search or enter a URL</div>
+<div class="section-title">Quick links</div>
+<div class="links">
+<a href="https://www.wikipedia.org/"><strong>Wikipedia</strong> <span class="url">www.wikipedia.org</span></a>
+<a href="https://news.ycombinator.com"><strong>Hacker News</strong> <span class="url">news.ycombinator.com</span></a>
+<a href="https://lite.cnn.com"><strong>CNN Lite</strong> <span class="url">lite.cnn.com</span></a>
+<a href="helix://history"><strong>History</strong> <span class="url">helix://history</span></a>
+</div>
+<div class="shortcuts">
+<div class="section-title" style="margin-top:0;">Shortcuts</div>
 <span class="key"><strong>Ctrl+L</strong> &mdash; address bar</span>
 <span class="key"><strong>Ctrl+T / W</strong> &mdash; new / close tab</span>
 <span class="key"><strong>Ctrl+R</strong> &mdash; reload</span>
 <span class="key"><strong>Ctrl+F</strong> &mdash; find in page</span>
-<span class="key"><strong>Ctrl++/-</strong> &mdash; zoom</span>
+<span class="key"><strong>Ctrl + + / -</strong> &mdash; zoom</span>
 <span class="key"><strong>Alt+Left/Right</strong> &mdash; back / forward</span>
 </div>
 <div class="ft">
-<p>Helix v1.0 <span class="tag">cross-platform</span></p>
-<p style="margin-top:6px;">HTML &bull; CSS &bull; JS &bull; Layout &bull; Rendering &mdash; all from scratch</p>
+<p><span class="tag">cross-platform</span></p>
+<p style="margin-top:6px;">No Chromium. No WebView. No shortcuts.</p>
 </div>
 </div>
 </body>

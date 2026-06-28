@@ -42,6 +42,7 @@ constexpr UINT WM_NEWTAB_NAVIGATE = WM_USER + 3;
 // ─── globals ─────────────────────────────────────────────────────────────────
 static HWND     g_hwnd;
 static HWND     g_hwndBack, g_hwndFwrd, g_hwndRefr, g_hwndStop, g_hwndHome, g_hwndUrl;
+static HWND     g_hwndUrlBadge;
 static HWND     g_hwndStatus;
 static HWND     g_hwndFind;
 static bool     g_findVisible = false;
@@ -74,8 +75,13 @@ static constexpr COLORREF kChromeInk     = ToColorRef(helix::chrome_theme::Ink);
 static constexpr COLORREF kChromePanel   = ToColorRef(helix::chrome_theme::Panel);
 static constexpr COLORREF kChromeRail    = ToColorRef(helix::chrome_theme::Rail);
 static constexpr COLORREF kChromeActive  = ToColorRef(helix::chrome_theme::Active);
+static constexpr COLORREF kChromeHover   = ToColorRef(helix::chrome_theme::Hover);
+static constexpr COLORREF kChromePressed = ToColorRef(helix::chrome_theme::Pressed);
+static constexpr COLORREF kChromeDisabled = ToColorRef(helix::chrome_theme::Disabled);
 static constexpr COLORREF kChromeAccent  = ToColorRef(helix::chrome_theme::Accent);
+static constexpr COLORREF kChromeAccentSoft = ToColorRef(helix::chrome_theme::AccentSoft);
 static constexpr COLORREF kChromeQuiet   = ToColorRef(helix::chrome_theme::Quiet);
+static constexpr COLORREF kChromeDisabledText = ToColorRef(helix::chrome_theme::DisabledText);
 static constexpr COLORREF kChromeLine    = ToColorRef(helix::chrome_theme::Line);
 
 // ─── layout constants ─────────────────────────────────────────────────────────
@@ -90,6 +96,8 @@ constexpr int BTN_H     = helix::chrome_theme::ButtonHeight;
 constexpr int MARGIN    = helix::chrome_theme::Margin;
 constexpr int GAP       = helix::chrome_theme::Gap;
 constexpr int CORNER_R  = helix::chrome_theme::CornerRadius;
+constexpr int URL_BADGE_W = 28;
+static HWND g_hoverChromeButton = nullptr;
 
 // ─── active tab helpers ───────────────────────────────────────────────────────
 static Tab& CurTab() { return g_tabs[g_activeTab]; }
@@ -109,8 +117,22 @@ static std::string ToUtf8(const std::wstring& w) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
     return s;
 }
+
+static std::wstring UrlBadgeText(const std::string& url) {
+    if (url.rfind("helix://", 0) == 0 || url.rfind("felix://", 0) == 0) return L"H";
+    if (url.rfind("https://", 0) == 0) return L"S";
+    if (url.rfind("http://", 0) == 0) return L"i";
+    return L"?";
+}
+
+static void SetUrlBadge(const std::string& url) {
+    if (g_hwndUrlBadge)
+        SetWindowTextW(g_hwndUrlBadge, UrlBadgeText(url).c_str());
+}
+
 static void SetUrlBar(const std::string& url) {
     SetWindowTextW(g_hwndUrl, ToWide(url).c_str());
+    SetUrlBadge(url);
 }
 static void SetUrlBarForTab(const Tab& tab) {
     SetUrlBar(tab.displayUrl.empty() ? tab.url : tab.displayUrl);
@@ -126,6 +148,12 @@ static void UpdateTitle() {
     std::wstring t = ToWide(CurTab().title);
     if (t.empty()) t = L"New Tab";
     SetWindowTextW(g_hwnd, (t + L" \x2014 Helix").c_str());
+}
+
+static bool AnyTabLoading() {
+    for (const auto& tab : g_tabs)
+        if (tab.loading) return true;
+    return false;
 }
 
 // ─── scrollbar ───────────────────────────────────────────────────────────────
@@ -193,12 +221,16 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
     if (url.empty() || url == "helix://home" || url == "felix://home") {
         url = "helix://home";
         tab.page.reset(new Page{ url, ParseHtml(HomePageHtml()), {} });
+        tab.url     = url;
         tab.title   = "Helix";
+        tab.loading = false;
         tab.scrollY = 0.f;
         tab.pendingFragment.clear();
         tab.fragmentScrollPending = false;
         if (pushHistory) TabPushHistory(tab, url);
         if (tabIdx == g_activeTab) {
+            EnableWindow(g_hwndStop, FALSE);
+            EnableWindow(g_hwndRefr, TRUE);
             SetUrlBar(url);
             UpdateTitle();
             UpdateScrollbar();
@@ -221,12 +253,16 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         if (!any) html += "<p>No history yet.</p>";
         html += "</body></html>";
         tab.page.reset(new Page{ url, ParseHtml(html), {} });
+        tab.url     = url;
         tab.title   = "History";
+        tab.loading = false;
         tab.scrollY = 0.f;
         tab.pendingFragment.clear();
         tab.fragmentScrollPending = false;
         if (pushHistory) TabPushHistory(tab, url);
         if (tabIdx == g_activeTab) {
+            EnableWindow(g_hwndStop, FALSE);
+            EnableWindow(g_hwndRefr, TRUE);
             SetUrlBar(url);
             UpdateTitle();
             UpdateScrollbar();
@@ -260,6 +296,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         EnableWindow(g_hwndRefr, FALSE);
         SetUrlBar(displayUrl);
         UpdateTitle();
+        SetTimer(g_hwnd, 1, 16, NULL);
         InvalidateRect(g_hwnd, NULL, FALSE);
     }
 
@@ -356,7 +393,9 @@ static void LayoutControls() {
     x += BTN_W + GAP + 4;
     SetWindowPos(g_hwndHome, NULL, x, btnY, BTN_W, BTN_H, SWP_NOZORDER);
     int urlX = x + BTN_W + MARGIN + 2;
-    SetWindowPos(g_hwndUrl,    NULL, urlX, btnY, w - urlX - MARGIN, BTN_H, SWP_NOZORDER);
+    int urlW = w - urlX - MARGIN;
+    SetWindowPos(g_hwndUrlBadge, NULL, urlX + 5, btnY + 4, URL_BADGE_W - 6, BTN_H - 8, SWP_NOZORDER);
+    SetWindowPos(g_hwndUrl,    NULL, urlX + URL_BADGE_W, btnY, urlW - URL_BADGE_W - 6, BTN_H, SWP_NOZORDER);
     SetWindowPos(g_hwndStatus, NULL, 0, h - STATUS_H, w, STATUS_H, SWP_NOZORDER);
     SetWindowPos(g_hwndFind,   NULL, 0, h - STATUS_H - FIND_H, w, FIND_H, SWP_NOZORDER);
 }
@@ -367,12 +406,14 @@ static void DrawChromeButton(const DRAWITEMSTRUCT* dis) {
     bool disabled = (dis->itemState & ODS_DISABLED) != 0;
     bool pressed = (dis->itemState & ODS_SELECTED) != 0;
     bool focus = (dis->itemState & ODS_FOCUS) != 0;
+    bool hover = (dis->hwndItem == g_hoverChromeButton);
 
-    COLORREF fill = disabled ? RGB(236, 239, 244)
-        : pressed ? RGB(222, 228, 240)
+    COLORREF fill = disabled ? kChromeDisabled
+        : pressed ? kChromePressed
+        : hover ? kChromeHover
         : kChromeActive;
     COLORREF stroke = focus ? kChromeAccent : kChromeLine;
-    COLORREF text = disabled ? RGB(166, 173, 186) : kChromeInk;
+    COLORREF text = disabled ? kChromeDisabledText : kChromeInk;
 
     HBRUSH bg = CreateSolidBrush(fill);
     HPEN pen = CreatePen(PS_SOLID, focus ? 2 : 1, stroke);
@@ -394,6 +435,122 @@ static void DrawChromeButton(const DRAWITEMSTRUCT* dis) {
     if (oldFont) SelectObject(dc, oldFont);
 }
 
+static void InvalidateControlFrame(HWND control) {
+    if (!g_hwnd || !control) return;
+    RECT r{};
+    GetWindowRect(control, &r);
+    MapWindowPoints(NULL, g_hwnd, reinterpret_cast<POINT*>(&r), 2);
+    InflateRect(&r, 4, 4);
+    InvalidateRect(g_hwnd, &r, FALSE);
+}
+
+static void DrawEditFrame(HDC dc, HWND edit) {
+    if (!edit) return;
+    RECT r{};
+    GetWindowRect(edit, &r);
+    MapWindowPoints(NULL, g_hwnd, reinterpret_cast<POINT*>(&r), 2);
+    InflateRect(&r, 2, 2);
+    bool focused = (GetFocus() == edit);
+
+    HBRUSH bg = CreateSolidBrush(focused ? kChromeActive : kChromeHover);
+    HPEN pen = CreatePen(PS_SOLID, focused ? 2 : 1, focused ? kChromeAccent : kChromeLine);
+    HGDIOBJ oldBrush = SelectObject(dc, bg);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    if (focused) {
+        RECT halo = r;
+        InflateRect(&halo, 2, 2);
+        HPEN haloPen = CreatePen(PS_SOLID, 1, kChromeAccentSoft);
+        HGDIOBJ oldHaloPen = SelectObject(dc, haloPen);
+        HGDIOBJ oldHaloBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        RoundRect(dc, halo.left, halo.top, halo.right, halo.bottom, CORNER_R + 4, CORNER_R + 4);
+        SelectObject(dc, oldHaloBrush);
+        SelectObject(dc, oldHaloPen);
+        DeleteObject(haloPen);
+    }
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, CORNER_R + 2, CORNER_R + 2);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(bg);
+}
+
+static void DrawUrlFrame(HDC dc) {
+    if (!g_hwndUrl || !g_hwndUrlBadge) return;
+    RECT r{};
+    GetWindowRect(g_hwndUrlBadge, &r);
+    RECT edit{};
+    GetWindowRect(g_hwndUrl, &edit);
+    if (edit.left < r.left) r.left = edit.left;
+    if (edit.top < r.top) r.top = edit.top;
+    if (edit.right > r.right) r.right = edit.right;
+    if (edit.bottom > r.bottom) r.bottom = edit.bottom;
+    MapWindowPoints(NULL, g_hwnd, reinterpret_cast<POINT*>(&r), 2);
+    InflateRect(&r, 3, 2);
+    bool focused = (GetFocus() == g_hwndUrl);
+
+    HBRUSH bg = CreateSolidBrush(focused ? kChromeActive : kChromeHover);
+    HPEN pen = CreatePen(PS_SOLID, focused ? 2 : 1, focused ? kChromeAccent : kChromeLine);
+    HGDIOBJ oldBrush = SelectObject(dc, bg);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    if (focused) {
+        RECT halo = r;
+        InflateRect(&halo, 2, 2);
+        HPEN haloPen = CreatePen(PS_SOLID, 1, kChromeAccentSoft);
+        HGDIOBJ oldHaloPen = SelectObject(dc, haloPen);
+        HGDIOBJ oldHaloBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        RoundRect(dc, halo.left, halo.top, halo.right, halo.bottom, CORNER_R + 4, CORNER_R + 4);
+        SelectObject(dc, oldHaloBrush);
+        SelectObject(dc, oldHaloPen);
+        DeleteObject(haloPen);
+    }
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, CORNER_R + 2, CORNER_R + 2);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(bg);
+}
+
+static void DrawLoadingAccent(HDC dc) {
+    if (!AnyTabLoading()) return;
+    RECT rc{};
+    GetClientRect(g_hwnd, &rc);
+    int w = rc.right - rc.left;
+    if (w <= 0) return;
+    float phase = (float)((GetTickCount() % 1400) / 1400.0);
+    int segW = std::max(96, w / 5);
+    int x = (int)((w + segW) * phase) - segW;
+    RECT rail{ 0, TOP_INSET - 3, w, TOP_INSET };
+    HBRUSH railBrush = CreateSolidBrush(kChromeAccentSoft);
+    FillRect(dc, &rail, railBrush);
+    DeleteObject(railBrush);
+    RECT seg{ x, TOP_INSET - 3, std::min(w, x + segW), TOP_INSET };
+    if (seg.right > 0) {
+        if (seg.left < 0) seg.left = 0;
+        HBRUSH accentBrush = CreateSolidBrush(kChromeAccent);
+        FillRect(dc, &seg, accentBrush);
+        DeleteObject(accentBrush);
+    }
+}
+
+LRESULT CALLBACK ChromeButtonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                  UINT_PTR, DWORD_PTR) {
+    if (msg == WM_MOUSEMOVE && g_hoverChromeButton != hwnd) {
+        HWND old = g_hoverChromeButton;
+        g_hoverChromeButton = hwnd;
+        if (old) InvalidateRect(old, NULL, FALSE);
+        InvalidateRect(hwnd, NULL, FALSE);
+        TRACKMOUSEEVENT tme{};
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        TrackMouseEvent(&tme);
+    } else if (msg == WM_MOUSELEAVE && g_hoverChromeButton == hwnd) {
+        g_hoverChromeButton = nullptr;
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
 // ─── URL bar subclass ─────────────────────────────────────────────────────────
 LRESULT CALLBACK UrlProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                           UINT_PTR, DWORD_PTR) {
@@ -404,6 +561,8 @@ LRESULT CALLBACK UrlProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         return 0;
     }
     if (msg == WM_CHAR && wp == '\r') return 0;
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS)
+        InvalidateControlFrame(hwnd);
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
@@ -456,6 +615,8 @@ LRESULT CALLBACK FindProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         InvalidateRect(g_hwnd, NULL, FALSE);
         return r;
     }
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS)
+        InvalidateControlFrame(hwnd);
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
@@ -468,6 +629,7 @@ static std::vector<TabEntry> BuildTabEntries() {
         e.title   = ToWide(g_tabs[i].title.empty() ? "New Tab" : g_tabs[i].title);
         e.active  = (i == g_activeTab);
         e.loading = g_tabs[i].loading;
+        e.loadingProgress = (float)((GetTickCount() % 1200) / 1200.0);
         entries.push_back(std::move(e));
     }
     return entries;
@@ -491,16 +653,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_hwndRefr = btn(L"\x21BB", IDC_REFR);
         g_hwndStop = btn(L"\x2715", IDC_STOP);
         g_hwndHome = btn(L"\x2302", IDC_HOME);
+        SetWindowSubclass(g_hwndBack, ChromeButtonProc, 11, 0);
+        SetWindowSubclass(g_hwndFwrd, ChromeButtonProc, 12, 0);
+        SetWindowSubclass(g_hwndRefr, ChromeButtonProc, 13, 0);
+        SetWindowSubclass(g_hwndStop, ChromeButtonProc, 14, 0);
+        SetWindowSubclass(g_hwndHome, ChromeButtonProc, 15, 0);
 
+        g_hwndUrlBadge = CreateWindowW(L"STATIC", L"H",
+            WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
+            0,0,0,0, hwnd, NULL, hi, NULL);
         g_hwndUrl = CreateWindowW(L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
             0,0,0,0, hwnd, (HMENU)IDC_URL, hi, NULL);
         g_hwndStatus = CreateWindowW(L"STATIC", L"",
-            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_LEFTNOWORDWRAP,
+            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE,
             0,0,0,0, hwnd, NULL, hi, NULL);
 
         g_hwndFind = CreateWindowW(L"EDIT", L"",
-            WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+            WS_CHILD | ES_AUTOHSCROLL,
             0,0,0,0, hwnd, (HMENU)IDC_FIND, hi, NULL);
 
         EnableWindow(g_hwndStop, FALSE);
@@ -524,6 +694,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageW(g_hwndRefr, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
             SendMessageW(g_hwndStop, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
             SendMessageW(g_hwndHome, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
+            SendMessageW(g_hwndUrlBadge, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
             SendMessageW(g_hwndStatus, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
         }
         if (g_urlFont) {
@@ -590,6 +761,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_renderer.Paint(nullptr, 0.f, {},
                 (float)TOP_INSET, (float)TAB_H, &tabs);
         }
+        DrawUrlFrame(ps.hdc);
+        if (g_findVisible)
+            DrawEditFrame(ps.hdc, g_hwndFind);
+        DrawLoadingAccent(ps.hdc);
         UpdateScrollbar();
         EndPaint(hwnd, &ps);
         if (repaintForFragment) InvalidateRect(hwnd, NULL, FALSE);
@@ -620,6 +795,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wp;
+        HWND ctl = (HWND)lp;
+        if (ctl == g_hwndUrlBadge) {
+            SetTextColor(dc, kChromeAccent);
+            SetBkColor(dc, kChromeHover);
+            return (LRESULT)g_editBrush;
+        }
         SetTextColor(dc, kChromeQuiet);
         SetBkColor(dc, kChromeRail);
         return (LRESULT)g_statusBrush;
@@ -943,6 +1124,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             CurTab().loading = false;
             EnableWindow(g_hwndStop, FALSE);
             EnableWindow(g_hwndRefr, TRUE);
+            InvalidateRect(hwnd, NULL, FALSE);
             break;
         }
         return 0;
@@ -954,6 +1136,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         } catch (...) {
             OutputDebugStringA("[JS] Macrotask pump failed; timer stopped\n");
             KillTimer(hwnd, 1);
+        }
+        if (AnyTabLoading()) {
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            rc.bottom = TOP_INSET;
+            InvalidateRect(hwnd, &rc, FALSE);
         }
         return 0;
 
@@ -1128,6 +1316,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow) {
                     CurTab().title   = CurTab().url;
                     EnableWindow(g_hwndStop, FALSE);
                     EnableWindow(g_hwndRefr, TRUE);
+                    InvalidateRect(g_hwnd, NULL, FALSE);
                     handled = true;
                 }
             }

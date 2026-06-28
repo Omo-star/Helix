@@ -20,6 +20,7 @@ struct TabEntry {
     std::wstring title;
     bool         active  = false;
     bool         loading = false;
+    float        loadingProgress = 0.f;
 };
 
 class Renderer : public ITextMeasure {

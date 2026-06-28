@@ -25,6 +25,7 @@
 
 static GtkWidget* g_window;
 static GtkWidget* g_urlEntry;
+static GtkWidget* g_urlBadge;
 static GtkWidget* g_statusLabel;
 static GtkWidget* g_drawingArea;
 
@@ -50,6 +51,18 @@ static std::string CssRgb(helix::chrome_theme::Rgb c) {
     return "rgb(" + std::to_string(c.r) + ", " + std::to_string(c.g) + ", " + std::to_string(c.b) + ")";
 }
 
+static const char* UrlBadgeText(const std::string& url) {
+    if (url.rfind("helix://", 0) == 0 || url.rfind("felix://", 0) == 0) return "H";
+    if (url.rfind("https://", 0) == 0) return "S";
+    if (url.rfind("http://", 0) == 0) return "i";
+    return "?";
+}
+
+static void SetUrlBadge(const std::string& url) {
+    if (g_urlBadge)
+        gtk_label_set_text(GTK_LABEL(g_urlBadge), UrlBadgeText(url));
+}
+
 static void AddStyleClass(GtkWidget* widget, const char* className) {
     if (!widget) return;
     gtk_style_context_add_class(gtk_widget_get_style_context(widget), className);
@@ -60,11 +73,13 @@ static void ApplyChromeTheme(
     GtkWidget* toolbar,
     GtkWidget* status,
     GtkWidget* urlEntry,
+    GtkWidget* urlBadge,
     const std::vector<GtkWidget*>& buttons) {
     using namespace helix::chrome_theme;
     AddStyleClass(toolbar, "helix-toolbar");
     AddStyleClass(status, "helix-status");
     AddStyleClass(urlEntry, "helix-url");
+    AddStyleClass(urlBadge, "helix-url-badge");
     for (GtkWidget* button : buttons) {
         AddStyleClass(button, "helix-command");
         gtk_widget_set_size_request(button, ButtonWidth, ButtonHeight);
@@ -87,8 +102,15 @@ static void ApplyChromeTheme(
         " color: " + CssRgb(Ink) + ";"
         " font-weight: 600;"
         "}"
-        ".helix-command:disabled { color: " + CssRgb(Quiet) + "; }"
-        ".helix-command:hover { border-color: " + CssRgb(Accent) + "; }"
+        ".helix-command:disabled {"
+        " background: " + CssRgb(Disabled) + ";"
+        " color: " + CssRgb(DisabledText) + ";"
+        "}"
+        ".helix-command:hover {"
+        " background: " + CssRgb(Hover) + ";"
+        " border-color: " + CssRgb(Accent) + ";"
+        "}"
+        ".helix-command:active { background: " + CssRgb(Pressed) + "; }"
         ".helix-url {"
         " min-height: " + std::to_string(ButtonHeight) + "px;"
         " padding: 0 10px;"
@@ -98,7 +120,16 @@ static void ApplyChromeTheme(
         " color: " + CssRgb(Ink) + ";"
         " font-size: 14px;"
         "}"
-        ".helix-url:focus { border-color: " + CssRgb(Accent) + "; }"
+        ".helix-url:focus {"
+        " border-color: " + CssRgb(Accent) + ";"
+        " box-shadow: 0 0 0 2px " + CssRgb(AccentSoft) + ";"
+        "}"
+        ".helix-url-badge {"
+        " min-width: 22px;"
+        " min-height: " + std::to_string(ButtonHeight) + "px;"
+        " color: " + CssRgb(Accent) + ";"
+        " font-weight: 700;"
+        "}"
         ".helix-status {"
         " background: " + CssRgb(Rail) + ";"
         " color: " + CssRgb(Quiet) + ";"
@@ -325,6 +356,7 @@ static void on_home(GtkWidget* w, gpointer d) {
     (void)w; (void)d;
     g_chrome.home();
     gtk_entry_set_text(GTK_ENTRY(g_urlEntry), "helix://home");
+    SetUrlBadge("helix://home");
     gtk_widget_queue_draw(g_drawingArea);
 }
 
@@ -453,11 +485,13 @@ int main(int argc, char* argv[]) {
     gtk_entry_set_placeholder_text(GTK_ENTRY(g_urlEntry), "Enter URL or search...");
     g_signal_connect(g_urlEntry, "activate", G_CALLBACK(on_url_activate), NULL);
     gtk_widget_set_hexpand(g_urlEntry, TRUE);
+    g_urlBadge = gtk_label_new("H");
 
     gtk_box_pack_start(GTK_BOX(toolbar), backBtn,   FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(toolbar), fwdBtn,    FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(toolbar), reloadBtn, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(toolbar), homeBtn,   FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(toolbar), g_urlBadge, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(toolbar), g_urlEntry, TRUE,  TRUE,  0);
 
     gtk_box_pack_start(GTK_BOX(vbox), toolbar, FALSE, FALSE, 0);
@@ -479,13 +513,16 @@ int main(int argc, char* argv[]) {
     g_statusLabel = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(g_statusLabel), 0);
     gtk_widget_set_margin_start(g_statusLabel, 0);
-    ApplyChromeTheme(g_window, toolbar, g_statusLabel, g_urlEntry, chromeButtons);
+    ApplyChromeTheme(g_window, toolbar, g_statusLabel, g_urlEntry, g_urlBadge, chromeButtons);
     gtk_box_pack_start(GTK_BOX(vbox), g_statusLabel, FALSE, FALSE, 0);
 
     // Wire chrome callbacks.
     g_chrome.cb.repaint = []() { if (g_drawingArea) gtk_widget_queue_draw(g_drawingArea); };
     g_chrome.cb.setTitle = [](const std::string& t) { if (g_window) gtk_window_set_title(GTK_WINDOW(g_window), t.c_str()); };
-    g_chrome.cb.setAddressText = [](const std::string& u) { if (g_urlEntry) gtk_entry_set_text(GTK_ENTRY(g_urlEntry), u.c_str()); };
+    g_chrome.cb.setAddressText = [](const std::string& u) {
+        if (g_urlEntry) gtk_entry_set_text(GTK_ENTRY(g_urlEntry), u.c_str());
+        SetUrlBadge(u);
+    };
     g_chrome.cb.setStatusText = [](const std::string& s) { if (g_statusLabel) gtk_label_set_text(GTK_LABEL(g_statusLabel), s.c_str()); };
     g_chrome.onNavigateRequested = platformFetch;
     g_chrome.init();

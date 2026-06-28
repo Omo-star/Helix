@@ -177,6 +177,8 @@ public:
             tab.page->dom = ParseHtml(HomePageHtml());
             tab.title = "Helix";
             tab.url = url;
+            tab.loading = false;
+            state.loading = false;
             tab.scrollY = 0;
             if (pushHistory) pushToHistory(tab, url);
             updateTitle();

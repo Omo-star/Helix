@@ -312,6 +312,14 @@ void Renderer::DrawTabStrip(const std::vector<TabEntry>& tabs, float h) {
         if (t.loading && accent) {
             float dot = x + 10.f;
             m_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dot, 5.f + tabH * 0.5f), 3.f, 3.f), accent);
+            float barLeft = x + 10.f;
+            float barRight = x + tabW - 18.f;
+            float barW = std::max(16.f, barRight - barLeft);
+            float segW = std::min(54.f, std::max(18.f, barW * 0.34f));
+            float travel = std::max(1.f, barW - segW);
+            float phase = t.loadingProgress - std::floor(t.loadingProgress);
+            float segX = barLeft + travel * phase;
+            m_rt->FillRectangle(D2D1::RectF(segX, 5.f + tabH - 3.f, segX + segW, 5.f + tabH - 1.f), accent);
         }
 
         float textX = x + pad + (t.loading ? 10.f : 0.f);
