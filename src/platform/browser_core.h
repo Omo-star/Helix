@@ -90,12 +90,25 @@ inline std::string UrlEncodeQuery(const std::string& s) {
 }
 
 inline bool LooksLikeUrl(const std::string& s) {
+    if (s.empty()) return false;
     if (s.find("://") != std::string::npos) return true;
     if (s.size() > 1 && s[0] == '/' && s[1] == '/') return true;
-    // Has a dot before any space → probably a domain.
+    if (s.rfind("helix://", 0) == 0 || s.rfind("about:", 0) == 0) return true;
+    if (s.find(' ') != std::string::npos) return false;
+    // localhost, localhost:3000
+    if (s == "localhost" || s.rfind("localhost:", 0) == 0) return true;
+    // 127.0.0.1, 127.0.0.1:8080
+    if (s.rfind("127.", 0) == 0) return true;
+    // [::1]
+    if (s.rfind("[", 0) == 0) return true;
+    // IP addresses (digits and dots only, no TLD needed)
+    bool allDigitsDots = true;
+    for (char c : s) if (!std::isdigit((unsigned char)c) && c != '.' && c != ':') { allDigitsDots = false; break; }
+    if (allDigitsDots && s.find('.') != std::string::npos) return true;
+    // Has a dot → probably a domain (example.com, en.wikipedia.org)
     size_t dot = s.find('.');
-    size_t sp  = s.find(' ');
-    return dot != std::string::npos && (sp == std::string::npos || dot < sp);
+    if (dot == std::string::npos || dot == 0 || dot == s.size() - 1) return false;
+    return true;
 }
 
 inline std::string UrlFragment(const std::string& url) {

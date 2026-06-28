@@ -54,14 +54,17 @@ std::map<const Node*, float> g_elementScrollY;
 static std::vector<ScrollableRegion> g_scrollables;
 static JsEngine g_js;
 
-static std::vector<Tab> g_tabs;
-static int      g_activeTab = 0;
+static BrowserChrome g_chrome;
+// Legacy aliases — gradually migrate to g_chrome.state.tabs/activeTab.
+#define g_tabs     g_chrome.state.tabs
+#define g_activeTab g_chrome.state.activeTab
 
 static HCURSOR  g_cursorArrow, g_cursorHand;
 
 // ─── layout constants ─────────────────────────────────────────────────────────
-constexpr int TAB_H     = 36;   // tab strip height
-constexpr int TOOLBAR_H = 44;   // toolbar (buttons + URL bar)
+// Layout constants from ChromeLayout (shared with chrome.h).
+constexpr int TAB_H     = 36;
+constexpr int TOOLBAR_H = 44;
 constexpr int STATUS_H  = 22;
 constexpr int FIND_H    = 34;   // find bar height
 constexpr int TOP_INSET = TAB_H + TOOLBAR_H;  // total above content
@@ -128,76 +131,7 @@ static void ClampScroll() {
     CurTab().scrollY = std::max(0.f, std::min(CurTab().scrollY, maxY));
 }
 
-// ─── built-in home page ───────────────────────────────────────────────────────
-static const std::string kHomeHtml = R"html(<!DOCTYPE html>
-<html>
-<head><title>Helix</title>
-<style>
-body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #f0e9dc;
-    color: #4a4033;
-    margin: 0;
-    padding: 60px 0;
-    line-height: 1.6;
-}
-.w { width: 500px; margin-left: auto; margin-right: auto; }
-h1 { font-size: 40px; color: #2e2820; text-align: center; margin-bottom: 4px; }
-.accent { color: #b07d3c; }
-.sub { text-align: center; color: #6b5f4d; font-size: 15px; }
-.sub2 { text-align: center; color: #9a8b73; font-size: 13px; margin-top: 4px; }
-.links { padding: 30px 0; }
-.links a {
-    display: block;
-    background: #faf6ee;
-    border: 1px solid #ddd2bd;
-    border-radius: 8px;
-    padding: 14px 20px;
-    margin: 8px 0;
-    text-decoration: none;
-    color: #4a4033;
-    font-size: 15px;
-}
-.url { color: #9a8b73; font-size: 12px; }
-.sep { border-top: 1px solid #ddd2bd; padding-top: 20px; margin-top: 20px; }
-h3 { font-size: 13px; color: #b07d3c; margin-bottom: 12px; }
-.key { display: block; padding: 3px 0; color: #6b5f4d; font-size: 13px; }
-.key strong { color: #2e2820; }
-.ft { border-top: 1px solid #ddd2bd; margin-top: 30px; padding-top: 20px; text-align: center; }
-.ft p { font-size: 12px; color: #9a8b73; }
-.tag { background: #e8dcc4; color: #b07d3c; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
-</style>
-</head>
-<body>
-<div class="w">
-<h1><span class="accent">&lt;</span>Helix<span class="accent">/&gt;</span></h1>
-<p class="sub">A web browser, built from scratch in C++</p>
-<p class="sub2">No Chromium. No WebView. No shortcuts.</p>
-
-<div class="links">
-<a href="https://en.wikipedia.org/wiki/Main_Page">Wikipedia <span class="url">en.wikipedia.org</span></a>
-<a href="https://news.ycombinator.com">Hacker News <span class="url">news.ycombinator.com</span></a>
-<a href="https://lite.cnn.com">CNN Lite <span class="url">lite.cnn.com</span></a>
-<a href="helix://history">History <span class="url">helix://history</span></a>
-</div>
-
-<div class="sep">
-<h3>SHORTCUTS</h3>
-<span class="key"><strong>Ctrl+L</strong> &mdash; address bar</span>
-<span class="key"><strong>Ctrl+T / W</strong> &mdash; new / close tab</span>
-<span class="key"><strong>Ctrl+R</strong> &mdash; reload</span>
-<span class="key"><strong>Ctrl+F</strong> &mdash; find in page</span>
-<span class="key"><strong>Ctrl++/-</strong> &mdash; zoom</span>
-<span class="key"><strong>Alt+Left/Right</strong> &mdash; back / forward</span>
-</div>
-
-<div class="ft">
-<p>Helix v1.0 <span class="tag">cross-platform</span></p>
-<p style="margin-top:6px;">HTML &bull; CSS &bull; JS &bull; Layout &bull; Rendering &mdash; all from scratch</p>
-</div>
-</div>
-</body>
-</html>)html";
+// Home page HTML comes from HomePageHtml() in browser_core.h.
 
 // ─── title extraction ────────────────────────────────────────────────────────
 static std::string ExtractTitle(const Node* root) {
@@ -242,7 +176,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
     // ── built-in: home ──────────────────────────────────────────────────
     if (url.empty() || url == "helix://home" || url == "felix://home") {
         url = "helix://home";
-        tab.page.reset(new Page{ url, ParseHtml(kHomeHtml), {} });
+        tab.page.reset(new Page{ url, ParseHtml(HomePageHtml()), {} });
         tab.title   = "Helix";
         tab.scrollY = 0.f;
         tab.pendingFragment.clear();

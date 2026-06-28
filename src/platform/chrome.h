@@ -30,8 +30,8 @@
 // ── Chrome layout constants ─────────────────────────────────────────────────
 
 struct ChromeLayout {
-    float tabStripH   = 26.f;
-    float toolbarH    = 32.f;
+    float tabStripH   = 36.f;
+    float toolbarH    = 44.f;
     float statusBarH  = 22.f;
     float findBarH    = 28.f;
     float buttonW     = 32.f;
@@ -202,22 +202,10 @@ public:
         if (cb.setAddressText) cb.setAddressText(url);
         if (cb.repaint) cb.repaint();
 
-        // Fetch in background thread
-        std::string fetchUrl = url;
-        int idx = tabIdx;
-        std::thread([this, fetchUrl, idx]() {
-            auto res = FetchUrl(fetchUrl);
-            auto* page = new Page();
-            page->url = fetchUrl;
-            if (res.success && !res.body.empty()) {
-                page->dom = ParseHtml(DecodeTextToUtf8(res.body, res.contentType, true));
-                LoadExternalStylesheets(page->dom, page->url);
-            } else {
-                page->error = res.error;
-            }
-            // Post back to main thread — platform adapter handles this.
-            if (onPageLoaded) onPageLoaded(idx, page);
-        }).detach();
+        // Emit navigate-requested intent. The platform adapter owns the fetch
+        // thread and posts the result back on the UI thread via onPageReady().
+        // This avoids lifetime/thread bugs from detached threads in the chrome.
+        if (onNavigateRequested) onNavigateRequested(tabIdx, url);
     }
 
     void onPageReady(int tabIdx, Page* page) {
@@ -295,10 +283,10 @@ public:
     void zoomOut() { state.zoom = std::max(0.5f, state.zoom - 0.1f); if (cb.repaint) cb.repaint(); }
     void zoomReset() { state.zoom = 1.f; if (cb.repaint) cb.repaint(); }
 
-    // Callback for async page loads — platform adapter sets this to post
-    // the result back to the main thread (e.g. PostMessage on Windows,
-    // g_idle_add on GTK, dispatch_async on macOS).
-    std::function<void(int tabIdx, Page* page)> onPageLoaded;
+    // Platform callbacks for navigation:
+    // onNavigateRequested: platform fetches the URL and calls onPageReady() when done.
+    // This keeps thread ownership in the platform layer, not the chrome.
+    std::function<void(int tabIdx, const std::string& url)> onNavigateRequested;
 
 private:
     void pushToHistory(Tab& tab, const std::string& url) {
