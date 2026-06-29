@@ -141,70 +141,68 @@ body {
     background: #f5f6f8;
     color: #17191f;
     margin: 0;
-    padding: 56px 0;
-    line-height: 1.45;
+    padding: 28px 0 48px;
 }
 .w { width: 720px; margin-left: auto; margin-right: auto; }
-.brand { text-align: center; margin-bottom: 26px; }
+.brand { text-align: center; margin-bottom: 18px; }
 .mark {
-    display: inline-block; background: #3b6df6; color: white;
-    border-radius: 10px; padding: 7px 13px; font-weight: 700;
-    letter-spacing: 0; font-size: 15px;
+    display: block; background: #3b6df6; color: white;
+    border-radius: 8px; padding: 9px 0; font-weight: 700;
+    font-size: 15px; width: 94px; margin-left: auto; margin-right: auto;
 }
-h1 { font-size: 44px; color: #17191f; text-align: center; margin: 14px 0 4px; }
-.sub { text-align: center; color: #8a93a5; font-size: 15px; margin: 0; }
+.title {
+    color: #17191f; text-align: center; font-size: 34px; font-weight: 700;
+    padding-top: 22px; padding-bottom: 12px;
+}
+.sub { text-align: center; color: #8a93a5; font-size: 15px; padding-bottom: 8px; }
 .search {
     background: #ffffff; border: 1px solid #d1d6e0; border-radius: 10px;
-    padding: 15px 18px; margin: 24px 0 18px; color: #8a93a5;
+    padding: 16px 18px; margin: 20px 0 18px; color: #8a93a5;
     font-size: 16px;
 }
-.search strong { color: #17191f; }
 .section-title {
     color: #8a93a5; font-size: 12px; font-weight: 700;
-    margin: 22px 0 10px; text-transform: uppercase;
+    padding-top: 18px; padding-bottom: 10px; text-transform: uppercase;
 }
 .links { padding: 0; }
 .links a {
     display: block; background: #ffffff; border: 1px solid #d1d6e0;
-    border-radius: 8px; padding: 14px 16px; margin: 8px 0;
-    text-decoration: none; color: #17191f; font-size: 15px;
+    border-radius: 8px; padding: 15px 16px; margin: 8px 0;
+    text-decoration: none; color: #3b6df6; font-size: 15px; font-weight: 700;
 }
-.links a strong { color: #3b6df6; }
-.url { color: #8a93a5; font-size: 12px; }
 .shortcuts {
     background: #e5e8ee; border-radius: 8px; padding: 14px 18px;
     margin-top: 18px;
 }
-.key { display: block; padding: 4px 0; color: #5d6575; font-size: 13px; }
-.key strong { color: #17191f; }
-.ft { margin-top: 24px; text-align: center; }
+.key { display: block; padding: 5px 0; color: #5d6575; font-size: 13px; }
+.ft { padding-top: 24px; text-align: center; }
 .ft p { font-size: 12px; color: #8a93a5; }
-.tag { background: #dde7ff; color: #3b6df6; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
+.tag { color: #3b6df6; font-size: 12px; font-weight: 700; }
 </style>
 </head>
 <body>
 <div class="w">
 <div class="brand">
 <span class="mark">HELIX</span>
-<h1>Start browsing</h1>
-<p class="sub">A from-scratch browser engine with its own HTML, CSS, JS, layout, and renderer.</p>
+<div class="title">Start browsing</div>
+<div class="sub">A from-scratch browser engine with its own HTML, CSS, JS, layout, and renderer.</div>
 </div>
-<div class="search"><strong>Ctrl+L</strong> to search or enter a URL</div>
+<div class="search">Ctrl+L - search or enter a URL</div>
 <div class="section-title">Quick links</div>
 <div class="links">
-<a href="https://www.wikipedia.org/"><strong>Wikipedia</strong> <span class="url">www.wikipedia.org</span></a>
-<a href="https://news.ycombinator.com"><strong>Hacker News</strong> <span class="url">news.ycombinator.com</span></a>
-<a href="https://lite.cnn.com"><strong>CNN Lite</strong> <span class="url">lite.cnn.com</span></a>
-<a href="helix://history"><strong>History</strong> <span class="url">helix://history</span></a>
+<a href="https://www.wikipedia.org/">Wikipedia - www.wikipedia.org</a>
+<a href="https://news.ycombinator.com">Hacker News - news.ycombinator.com</a>
+<a href="https://lite.cnn.com">CNN Lite - lite.cnn.com</a>
+<a href="helix://history">History - helix://history</a>
 </div>
 <div class="shortcuts">
 <div class="section-title" style="margin-top:0;">Shortcuts</div>
-<span class="key"><strong>Ctrl+L</strong> &mdash; address bar</span>
-<span class="key"><strong>Ctrl+T / W</strong> &mdash; new / close tab</span>
-<span class="key"><strong>Ctrl+R</strong> &mdash; reload</span>
-<span class="key"><strong>Ctrl+F</strong> &mdash; find in page</span>
-<span class="key"><strong>Ctrl + + / -</strong> &mdash; zoom</span>
-<span class="key"><strong>Alt+Left/Right</strong> &mdash; back / forward</span>
+<span class="key">Ctrl+L - address bar</span>
+<span class="key">Ctrl+T / W - new / close tab</span>
+<span class="key">Ctrl+R - reload</span>
+<span class="key">Ctrl+F - find in page</span>
+<span class="key">Ctrl + + / - - zoom</span>
+<span class="key">Alt+Left/Right - back / forward</span>
 </div>
 <div class="ft">
 <p><span class="tag">cross-platform</span></p>
