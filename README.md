@@ -1,5 +1,7 @@
 # Helix
 
+![Helix homepage](/src/screenshot.png)
+
 ![Release](https://img.shields.io/github/v/release/Omo-star/Helix?style=flat-square)
 ![Build](https://img.shields.io/github/actions/workflow/status/Omo-star/Helix/release.yml?style=flat-square)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
