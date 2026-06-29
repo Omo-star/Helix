@@ -121,13 +121,21 @@ struct FormState {
         float docY = y + scrollY - topInset;
         const Node* found = nullptr;
         std::function<void(const LayoutBox&)> walk = [&](const LayoutBox& box) {
+            float bx = box.x, by = box.y;
+            float bw = box.borderBoxW(), bh = box.borderBoxH();
+            bool inside = x >= bx && x <= bx + bw && docY >= by && docY <= by + bh;
             if (box.node && box.node->type == NodeType::Element) {
-                float bx = box.x, by = box.y;
-                float bw = box.borderBoxW(), bh = box.borderBoxH();
-                if (x >= bx && x <= bx + bw && docY >= by && docY <= by + bh)
+                if (inside)
                     found = box.node;  // deeper nodes override shallower ones
             }
-            for (auto& k : box.kids) walk(*k);
+            if (inside || &box == &root) {
+                for (auto& k : box.kids) walk(*k);
+            } else if (!box.style.overflowHidden) {
+                for (auto& k : box.kids) {
+                    if (k->isOutOfFlow() || k->isFloat() || k->style.positionMode == 1)
+                        walk(*k);
+                }
+            }
         };
         walk(root);
         return found;

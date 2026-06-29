@@ -139,10 +139,19 @@ static void SetUrlBarForTab(const Tab& tab) {
 }
 static void SetStatus(const std::string& s) {
     // Show updater status when not hovering a link.
-    if (s.empty() && !g_updater.statusMessage.empty())
-        SetWindowTextW(g_hwndStatus, ToWide(g_updater.statusMessage).c_str());
-    else
-        SetWindowTextW(g_hwndStatus, ToWide(s).c_str());
+    std::string effective = (s.empty() && !g_updater.statusMessage.empty())
+        ? g_updater.statusMessage
+        : s;
+    static std::string lastStatus;
+    if (effective == lastStatus) return;
+    lastStatus = effective;
+    SetWindowTextW(g_hwndStatus, ToWide(effective).c_str());
+}
+static void SetBrowserCursor(HCURSOR cursor) {
+    static HCURSOR lastCursor = nullptr;
+    if (cursor == lastCursor) return;
+    lastCursor = cursor;
+    SetCursor(cursor);
 }
 static void UpdateTitle() {
     std::wstring t = ToWide(CurTab().title);
@@ -1104,10 +1113,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int py = (int)(short)HIWORD(lp);
         if (py >= TOP_INSET) {
             std::string href = g_renderer.HitTest((float)px, (float)py);
-            SetCursor(href.empty() ? g_cursorArrow : g_cursorHand);
+            SetBrowserCursor(href.empty() ? g_cursorArrow : g_cursorHand);
             SetStatus(href);
             // Track :hover node for CSS hover styles (throttled to ~30Hz).
-            if (g_renderer.GetLayoutRoot()) {
+            if (g_renderer.GetLayoutRoot() && g_renderer.UsesHoverStyles()) {
                 static DWORD lastHoverTick = 0;
                 DWORD now = GetTickCount();
                 if (now - lastHoverTick >= 33) { // ~30Hz
@@ -1121,9 +1130,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         InvalidateContent();
                     }
                 }
+            } else if (g_hoverNode) {
+                g_hoverNode = nullptr;
+                InvalidateContent();
             }
         } else {
-            SetCursor(g_cursorArrow);
+            SetBrowserCursor(g_cursorArrow);
             SetStatus({});
             if (g_hoverNode) {
                 g_hoverNode = nullptr;

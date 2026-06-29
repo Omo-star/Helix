@@ -141,6 +141,127 @@ TestResult RunPaintTests() {
     }
 
     {
+        auto root = FindRepoRoot();
+        std::string mainWin = ReadTextFile(root / "src/main.cpp");
+        std::string rendererH = ReadTextFile(root / "src/render/renderer.h");
+        const bool hoverTrackingIsConditional =
+            rendererH.find("UsesHoverStyles() const") != std::string::npos
+            && mainWin.find("g_renderer.GetLayoutRoot() && g_renderer.UsesHoverStyles()") != std::string::npos;
+        ExpectEqual("paint/hover-hit-test-runs-only-when-css-needs-it",
+            hoverTrackingIsConditional ? "conditional\n" : "always\n",
+            "conditional\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string formState = ReadTextFile(root / "src/platform/form_state.h");
+        const bool hoverHitTestPrunes =
+            formState.find("bool inside = x >= bx") != std::string::npos
+            && formState.find("if (inside || &box == &root)") != std::string::npos
+            && formState.find("if (k->isOutOfFlow() || k->isFloat() || k->style.positionMode == 1)") != std::string::npos;
+        ExpectEqual("paint/hover-hit-test-prunes-off-target-subtrees",
+            hoverHitTestPrunes ? "prunes\n" : "walks-all\n",
+            "prunes\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string mainWin = ReadTextFile(root / "src/main.cpp");
+        const bool statusIsIdempotent =
+            mainWin.find("static std::string lastStatus;") != std::string::npos
+            && mainWin.find("if (effective == lastStatus) return;") != std::string::npos;
+        ExpectEqual("paint/status-text-skips-redundant-window-updates",
+            statusIsIdempotent ? "idempotent\n" : "chatty\n",
+            "idempotent\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string renderer = ReadTextFile(root / "src/render/renderer.cpp");
+        std::string rendererH = ReadTextFile(root / "src/render/renderer.h");
+        const bool hoverFlagCached =
+            rendererH.find("m_cachedUsesHoverStyles") != std::string::npos
+            && renderer.find("m_cachedUsesHoverStyles = StylesheetUsesHover(m_cachedSheet);") != std::string::npos
+            && renderer.find("return m_cachedUsesHoverStyles;") != std::string::npos;
+        ExpectEqual("paint/hover-style-presence-is-cached",
+            hoverFlagCached ? "cached\n" : "rescans\n",
+            "cached\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string renderer = ReadTextFile(root / "src/render/renderer.cpp");
+        std::string rendererH = ReadTextFile(root / "src/render/renderer.h");
+        const bool brushCache =
+            rendererH.find("m_tempBrushCache") != std::string::npos
+            && renderer.find("m_tempBrushCache.find(key)") != std::string::npos
+            && renderer.find("m_tempBrushCache.clear();") != std::string::npos;
+        ExpectEqual("paint/temp-brushes-reuse-same-color-per-frame",
+            brushCache ? "cached\n" : "new-each-call\n",
+            "cached\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string renderer = ReadTextFile(root / "src/render/renderer.cpp");
+        std::string rendererH = ReadTextFile(root / "src/render/renderer.h");
+        const bool hitCache =
+            rendererH.find("m_lastHitValid") != std::string::npos
+            && renderer.find("m_lastHitRegion = *it;") != std::string::npos
+            && renderer.find("return m_lastHitHref;") != std::string::npos;
+        ExpectEqual("paint/link-hit-test-reuses-last-region",
+            hitCache ? "cached\n" : "scan-only\n",
+            "cached\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string mainWin = ReadTextFile(root / "src/main.cpp");
+        const bool cursorCached =
+            mainWin.find("SetBrowserCursor(HCURSOR cursor)") != std::string::npos
+            && mainWin.find("static HCURSOR lastCursor") != std::string::npos
+            && mainWin.find("if (cursor == lastCursor) return;") != std::string::npos;
+        ExpectEqual("paint/cursor-updates-skip-redundant-setcursor",
+            cursorCached ? "cached\n" : "chatty\n",
+            "cached\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string painter = ReadTextFile(root / "src/render/box_paint.cpp");
+        const bool plainTextFastPath =
+            painter.find("bool needsLayoutObject =") != std::string::npos
+            && painter.find("if (!needsLayoutObject)") != std::string::npos
+            && painter.find("m_rt->DrawText(frag.text.c_str()") != std::string::npos;
+        ExpectEqual("paint/plain-text-skips-explicit-text-layout",
+            plainTextFastPath ? "fast-path\n" : "layout-every-fragment\n",
+            "fast-path\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string painter = ReadTextFile(root / "src/render/box_paint.cpp");
+        std::string sharedPainter = ReadTextFile(root / "src/platform/box_painter.h");
+        const bool subtreeCull =
+            painter.find("bool offscreenSimpleSubtree =") != std::string::npos
+            && painter.find("screenY + box.borderBoxH() < topInset") != std::string::npos
+            && sharedPainter.find("bool offscreenSimpleSubtree =") != std::string::npos
+            && sharedPainter.find("screenY + box.borderBoxH() < ps.topInset") != std::string::npos;
+        ExpectEqual("paint/offscreen-simple-subtrees-are-culled",
+            subtreeCull ? "culled\n" : "visited\n",
+            "culled\n",
+            result);
+    }
+
+    {
         const std::string svg =
             "<svg width=\"12\" height=\"10\" viewBox=\"0 0 12 10\">"
             "<rect x=\"1\" y=\"2\" width=\"4\" height=\"3\" fill=\"red\"/>"

@@ -411,6 +411,20 @@ inline void PaintBoxTree(PaintState& ps, const LayoutBox& box) {
         }
     }
     if (simpleInFlowChildren) {
+        float screenY = box.y - ps.scrollY + ps.topInset;
+        bool offscreenSimpleSubtree =
+               box.style.positionMode != 3
+            && !box.style.transformSet
+            && box.kind != BoxKind::Inline
+            && box.kind != BoxKind::Text
+            && (screenY + box.borderBoxH() < ps.topInset || screenY > (float)ps.r->Height());
+        if (offscreenSimpleSubtree) {
+            if (clipped) {
+                ps.r->PopClip();
+                ps.scrollY = savedScrollForOverflow;
+            }
+            return;
+        }
         if (box.establishesInline) {
             if (!hidden) PaintLines(ps, box);
         } else {

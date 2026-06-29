@@ -61,6 +61,7 @@ public:
     float GetZoom() const { return m_zoom; }
     const LayoutBox* GetLayoutRoot() const { return m_layoutRoot.get(); }
     void InvalidateLayout();
+    bool UsesHoverStyles() const;
 
     void SetSearchQuery(const std::wstring& q) { m_searchQuery = q; }
     const std::wstring& GetSearchQuery() const { return m_searchQuery; }
@@ -103,12 +104,16 @@ private:
     std::function<void(std::string)>    m_imageRequestCb;
 
     std::vector<ID2D1SolidColorBrush*>  m_tempBrushes;
+    std::map<unsigned int, ID2D1SolidColorBrush*> m_tempBrushCache;
 
     HWND  m_hwnd   = nullptr;
     UINT  m_width  = 800;
     UINT  m_height = 600;
 
     std::vector<HitRegion> m_hits;
+    mutable bool m_lastHitValid = false;
+    mutable HitRegion m_lastHitRegion;
+    mutable std::string m_lastHitHref;
     std::map<std::string, float> m_anchorY;
 
     struct TabHit { float x, y, w, h; int idx; bool isClose; };
@@ -138,6 +143,7 @@ private:
     CssColor    m_cachedPageBg;
     const Node* m_styleDocKey = nullptr;
     std::string m_styleBaseUrlKey;
+    bool        m_cachedUsesHoverStyles = false;
 
     std::unique_ptr<LayoutBox> m_layoutRoot;
     const Node* m_layoutDocKey  = nullptr;

@@ -80,9 +80,24 @@ std::string Renderer::ResolveUrl(const std::string& href, const std::string& bas
 }
 
 ID2D1SolidColorBrush* Renderer::TempBrush(D2D1_COLOR_F color) {
+    auto clampByte = [](float v) -> unsigned int {
+        v = std::max(0.f, std::min(1.f, v));
+        return (unsigned int)(v * 255.f + 0.5f);
+    };
+    unsigned int key =
+        (clampByte(color.a) << 24)
+        | (clampByte(color.r) << 16)
+        | (clampByte(color.g) << 8)
+        | clampByte(color.b);
+    auto cached = m_tempBrushCache.find(key);
+    if (cached != m_tempBrushCache.end()) return cached->second;
+
     ID2D1SolidColorBrush* b = nullptr;
     if (m_rt) m_rt->CreateSolidColorBrush(color, &b);
-    if (b) m_tempBrushes.push_back(b);
+    if (b) {
+        m_tempBrushes.push_back(b);
+        m_tempBrushCache[key] = b;
+    }
     return b;
 }
 
@@ -183,6 +198,7 @@ void Renderer::ReleaseTarget() {
     ReleaseBrushes();
     for (auto* b : m_tempBrushes) if (b) b->Release();
     m_tempBrushes.clear();
+    m_tempBrushCache.clear();
     for (auto& [url, bmp] : m_images) if (bmp) bmp->Release();
     m_images.clear();
     if (m_rt) { m_rt->Release(); m_rt = nullptr; }
@@ -213,6 +229,7 @@ void Renderer::InvalidateLayout() {
     m_styleBaseUrlKey.clear();
     m_cachedSheet = Stylesheet{};
     m_cachedPageBg = CssColor{};
+    m_cachedUsesHoverStyles = false;
 }
 
 void Renderer::SetZoom(float z) {
@@ -419,6 +436,10 @@ static bool StylesheetUsesHover(const Stylesheet& sheet) {
     return false;
 }
 
+bool Renderer::UsesHoverStyles() const {
+    return m_cachedUsesHoverStyles;
+}
+
 Stylesheet Renderer::CollectStylesheet(const Node* root) {
     Stylesheet sheet;
     std::function<void(const Node*)> walk = [&](const Node* n) {
@@ -481,7 +502,9 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
 
     for (auto* b : m_tempBrushes) if (b) b->Release();
     m_tempBrushes.clear();
+    m_tempBrushCache.clear();
     m_hits.clear();
+    m_lastHitValid = false;
     // m_anchorY is rebuilt only when the layout tree is rebuilt (see below).
 
     m_rt->BeginDraw();
@@ -492,6 +515,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         if (m_styleDocKey != doc.get() || m_styleBaseUrlKey != baseUrl) {
             m_cachedSheet  = CollectStylesheet(doc.get());
             m_cachedPageBg = FindBodyBgColor(doc.get(), m_cachedSheet);
+            m_cachedUsesHoverStyles = StylesheetUsesHover(m_cachedSheet);
             m_styleDocKey = doc.get();
             m_styleBaseUrlKey = baseUrl;
             if (!m_cachedSheet.fontFaces.empty())
@@ -622,10 +646,21 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
 }
 
 std::string Renderer::HitTest(float x, float y) const {
+    if (m_lastHitValid
+        && x >= m_lastHitRegion.x && x <= m_lastHitRegion.x + m_lastHitRegion.w
+        && y >= m_lastHitRegion.y && y <= m_lastHitRegion.y + m_lastHitRegion.h) {
+        return m_lastHitHref;
+    }
     for (auto it = m_hits.rbegin(); it != m_hits.rend(); ++it)
         if (x >= it->x && x <= it->x + it->w
-         && y >= it->y && y <= it->y + it->h)
-            return UnwrapBingRedirect(it->href);
+         && y >= it->y && y <= it->y + it->h) {
+            m_lastHitRegion = *it;
+            m_lastHitHref = UnwrapBingRedirect(it->href);
+            m_lastHitValid = true;
+            return m_lastHitHref;
+        }
+    m_lastHitValid = false;
+    m_lastHitHref.clear();
     return {};
 }
 

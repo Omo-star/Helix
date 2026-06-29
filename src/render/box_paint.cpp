@@ -472,6 +472,18 @@ void Renderer::PaintLines(const LayoutBox& box, float scrollY, float topInset, b
             if (!fmt) continue;
             ID2D1SolidColorBrush* brush = fs.color.valid ? TempBrush(ToD2Dc(fs.color))
                                         : (!frag.src->href.empty() ? m_linkBrush : m_textBrush);
+            bool needsLayoutObject =
+                   (!fs.noUnderline && (fs.underline || !frag.src->href.empty()))
+                || fs.lineThrough
+                || (!m_searchQuery.empty() && m_findBrush)
+                || (box.style.textOverflow == 1 && box.style.overflowHidden)
+                || (fs.textShadowSet && fs.textShadowColor.valid && fs.textShadowColor.a > 0);
+            if (!needsLayoutObject) {
+                m_rt->DrawText(frag.text.c_str(), (UINT32)frag.text.size(), fmt,
+                    D2D1::RectF(frag.x, sy, frag.x + frag.w + 4.f, sy + frag.h * 2.f + 4.f),
+                    brush ? brush : m_textBrush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                continue;
+            }
             IDWriteTextLayout* lay = nullptr;
             if (SUCCEEDED(m_dwrite->CreateTextLayout(frag.text.c_str(), (UINT32)frag.text.size(),
                     fmt, frag.w + 4.f, frag.h * 2.f + 4.f, &lay)) && lay) {
@@ -587,6 +599,20 @@ void Renderer::PaintBox(const LayoutBox& box, float scrollY, float topInset, boo
         }
     }
     if (simpleInFlowChildren) {
+        float screenY = box.y - effScroll + topInset;
+        bool offscreenSimpleSubtree =
+               !fixed
+            && !hasTransform
+            && box.kind != BoxKind::Inline
+            && box.kind != BoxKind::Text
+            && (screenY + box.borderBoxH() < topInset || screenY > (float)m_height);
+        if (offscreenSimpleSubtree) {
+            if (clipped) {
+                m_rt->PopAxisAlignedClip();
+                scrollY = scrollYBefore;
+            }
+            return;
+        }
         if (box.establishesInline) {
             if (!hidden) PaintLines(box, effScroll, topInset, fixed);
         } else {
