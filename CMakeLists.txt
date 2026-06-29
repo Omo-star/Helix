@@ -73,6 +73,7 @@ endif()
 
 add_library(helix_engine STATIC
     src/network/fetcher.cpp
+    src/network/resource_cache.cpp
     src/network/text_decode.cpp
     src/network/url.cpp
     src/html/tokenizer.cpp

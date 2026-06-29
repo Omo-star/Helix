@@ -1,7 +1,7 @@
 #include "js/dom_bridge.h"
 #include "css/stylesheet.h"
 #include "html/parser.h"
-#include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/cookies.h"
 #include "network/url.h"
 #include <algorithm>
@@ -308,6 +308,7 @@ static void notifyMutationObservers(VM& vm, Node* target, const std::string& typ
 }
 
 static bool g_domDirtyCoalesced = false;
+static bool g_domPaintDirtyCoalesced = false;
 static DomBridgeCallbacks g_domCallbacks;
 static float g_windowScrollX = 0.f;
 static float g_windowScrollY = 0.f;
@@ -325,8 +326,30 @@ static void setWindowScrollTo(VM& vm, float x, float y) {
     syncWindowScrollGlobals(vm);
 }
 
-void notifyDomDirtyCoalesced(VM& vm) {
+static bool IsPaintOnlyDirtyType(const std::string& type) {
+    if (type.rfind("style:", 0) != 0) return false;
+    std::string prop = type.substr(6);
+    for (char& c : prop) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return prop == "color"
+        || prop == "background"
+        || prop == "background-color"
+        || prop == "border-color"
+        || prop == "outline-color"
+        || prop == "text-decoration"
+        || prop == "text-decoration-color"
+        || prop == "opacity"
+        || prop == "visibility";
+}
+
+void notifyDomDirtyCoalesced(VM& vm, bool affectsLayout) {
     vm.domDirty = true;
+    if (!affectsLayout && vm.onDomPaintDirty) {
+        if (!g_domPaintDirtyCoalesced) {
+            g_domPaintDirtyCoalesced = true;
+            vm.onDomPaintDirty();
+        }
+        return;
+    }
     if (!g_domDirtyCoalesced && vm.onDomDirty) {
         g_domDirtyCoalesced = true;
         vm.onDomDirty();
@@ -335,11 +358,14 @@ void notifyDomDirtyCoalesced(VM& vm) {
 
 static void markDomDirty(VM& vm, Node* target, const std::string& type) {
     notifyMutationObservers(vm, target, type);
-    notifyDomDirtyCoalesced(vm);
+    notifyDomDirtyCoalesced(vm, !IsPaintOnlyDirtyType(type));
 }
 
 // Call this from the platform timer to reset coalescing for the next batch.
-void resetDomDirtyCoalesce() { g_domDirtyCoalesced = false; }
+void resetDomDirtyCoalesce() {
+    g_domDirtyCoalesced = false;
+    g_domPaintDirtyCoalesced = false;
+}
 
 static bool CanEagerSerialize(Node* n) {
     if (!n) return false;
@@ -1403,6 +1429,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
                  const std::string& pageUrl,
                  DomBridgeCallbacks callbacks) {
     vm.onDomDirty = onRepaint;
+    vm.onDomPaintDirty = callbacks.repaintOnly ? callbacks.repaintOnly : onRepaint;
     g_domCallbacks = std::move(callbacks);
     g_windowScrollX = 0.f;
     g_windowScrollY = 0.f;
@@ -1416,7 +1443,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         if (wrapper->kind != ObjKind::DomWrapper) {
             if (wrapper->hasOwn("toggle")) return;   // classList, not a style obj
             rebuildStyleAttr(n, wrapper);
-            markDomDirty(*vmPtr, n, "attributes");
+            markDomDirty(*vmPtr, n, "style:" + key);
             return;
         }
         if (key == "className" || key == "class") n->attrs["class"] = val.toString();
@@ -1662,7 +1689,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
             std::string url = ARG_STR(0);
             // Synchronous fetch (simplified — real fetch is async, but our VM
             // doesn't have a true event loop yet).
-            auto res = FetchUrl(url);
+            auto res = FetchResourceCached(url, 12 * 1024 * 1024, ResourceKind::Other);
             auto* response = vm.gc().newObject(ObjKind::Plain);
             response->setProp("ok", JsValue::boolean(res.success));
             response->setProp("status", JsValue::integer(res.success ? 200 : 0));

@@ -88,6 +88,7 @@ public:
 
     // Callback to request animation frame / repaint.
     std::function<void()> onDomDirty;
+    std::function<void()> onDomPaintDirty;
 
     // Reflect a JS property write onto the backing DOM node (installed by the
     // DOM bridge). Called for writes to any object with a domNode so that

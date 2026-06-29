@@ -1,10 +1,14 @@
 #include "test/fixture.h"
 
 #include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/text_decode.h"
 #include "network/url.h"
 #include "html/parser.h"
 #include "html/resources.h"
+
+#include <chrono>
+#include <thread>
 
 static Node* FindScriptById(Node* root, const std::string& id) {
     if (!root) return nullptr;
@@ -101,6 +105,46 @@ TestResult RunNetworkTests() {
         ExpectEqual("network/external-classic-script-is-fetched-into-dom-order",
             (script ? script->attr("__helix_script_filename") : "missing") + "\n" + source + "\n",
             "data:text/javascript,window.answer%3D42%3B\nwindow.answer=42;\n",
+            result);
+    }
+
+    {
+        ResourceCache::instance().clearForTests();
+        auto first = FetchResourceCached("data:text/plain,cache-me", 1024, ResourceKind::Script);
+        auto second = FetchResourceCached("data:text/plain,cache-me", 1024, ResourceKind::Script);
+        const auto stats = ResourceCache::instance().stats();
+        std::string actual;
+        actual += (first.success ? first.body : "first-fail") + "\n";
+        actual += (second.success ? second.body : "second-fail") + "\n";
+        actual += "requests=" + std::to_string(stats.requests) + "\n";
+        actual += "network=" + std::to_string(stats.networkFetches) + "\n";
+        actual += "hits=" + std::to_string(stats.cacheHits) + "\n";
+        ExpectEqual("network/resource-cache/reuses-successful-resources",
+            actual,
+            "cache-me\ncache-me\nrequests=2\nnetwork=1\nhits=1\n",
+            result);
+    }
+
+    {
+        ResourceCache::instance().clearForTests();
+        std::string actual = "pending\n";
+        FetchResourceAsync("data:text/plain,async-ok", 1024, ResourceKind::Image,
+            [&](FetchResult res) {
+                actual += res.success ? res.body : res.error;
+                actual += "\n";
+            });
+        actual += HasPendingResourceCompletions() ? "has-pending\n" : "no-pending\n";
+        for (int i = 0; i < 200 && actual.find("async-ok\n") == std::string::npos; ++i) {
+            DrainResourceCompletions();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        DrainResourceCompletions();
+        const auto stats = ResourceCache::instance().stats();
+        actual += "requests=" + std::to_string(stats.requests) + "\n";
+        actual += "network=" + std::to_string(stats.networkFetches) + "\n";
+        ExpectEqual("network/resource-cache/async-completes-on-drain",
+            actual,
+            "pending\nhas-pending\nasync-ok\nrequests=1\nnetwork=1\n",
             result);
     }
 

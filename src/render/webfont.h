@@ -7,7 +7,7 @@
 // Pango) picks them up automatically. No font parsing needed.
 //
 #include "css/stylesheet.h"
-#include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/url.h"
 #include <string>
 #include <vector>
@@ -39,7 +39,7 @@ public:
             }
             // Fetch and install in background.
             std::thread([this, resolved, ff, onLoaded]() {
-                auto res = FetchUrl(resolved, 2 * 1024 * 1024); // 2MB max per font
+                auto res = FetchResourceCached(resolved, 2 * 1024 * 1024, ResourceKind::Font);
                 if (!res.success || res.body.size() < 100) return;
                 installFont(res.body, ff.family);
                 if (onLoaded) onLoaded();

@@ -11,6 +11,7 @@
 #include "platform/chrome_theme.h"
 #include "platform/box_painter.h"
 #include "platform/plat_text_measure.h"
+#include "network/resource_cache.h"
 #include "layout/layout_engine.h"
 #include "css/stylesheet.h"
 #include "js/dom_bridge.h"
@@ -422,7 +423,7 @@ int main(int argc, const char* argv[]) {
         g_chrome.onNavigateRequested = [](int tabIdx, const std::string& url) {
             // macOS platform-owned fetch.
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                auto res = FetchUrl(url);
+                auto res = FetchResourceCached(url, 12 * 1024 * 1024, ResourceKind::Document);
                 auto* page = new Page();
                 page->url = url;
                 if (res.success && !res.body.empty()) {

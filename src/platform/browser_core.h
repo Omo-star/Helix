@@ -6,6 +6,7 @@
 // image fetch throttling. Used by all platform shells (Win32, macOS, Linux).
 //
 #include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/url.h"
 #include "network/text_decode.h"
 #include "html/parser.h"
@@ -292,7 +293,7 @@ inline std::string ResolveImports(const std::string& css, const std::string& bas
         // Fetch the imported stylesheet.
         if (!importUrl.empty() && loaded < 64 && loadedBytes < 4 * 1024 * 1024) {
             std::string resolved = ResolveUrlAgainstBase(importUrl, baseUrl);
-            auto res = FetchUrl(resolved, 1024 * 1024);
+            auto res = FetchResourceCached(resolved, 1024 * 1024, ResourceKind::Stylesheet);
             if (res.success && !res.body.empty()) {
                 std::string importedCss = DecodeTextToUtf8(res.body, res.contentType);
                 loadedBytes += importedCss.size();
@@ -319,7 +320,7 @@ inline void LoadExternalStylesheets(const std::shared_ptr<Node>& dom, const std:
             && AttrContainsToken(n->attr("rel"), "stylesheet")
             && StylesheetMediaApplies(n->attr("media"))) {
             std::string href = ResolveUrlAgainstBase(n->attr("href"), pageUrl);
-            auto res = FetchUrl(href, 1024 * 1024);
+            auto res = FetchResourceCached(href, 1024 * 1024, ResourceKind::Stylesheet);
             if (res.success && !res.body.empty()) {
                 std::string css = DecodeTextToUtf8(res.body, res.contentType);
                 loadedBytes += css.size();

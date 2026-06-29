@@ -170,6 +170,30 @@ static std::string RunDomDirtyCoalescingSnapshot() {
     return std::to_string(repaintCount) + "\n";
 }
 
+static std::string RunDomPaintOnlyDirtySnapshot() {
+    JsEngine engine;
+    int layoutDirty = 0;
+    int paintDirty = 0;
+    auto dom = ParseHtml("<html><body><div id=\"box\"></div></body></html>");
+    DomBridgeCallbacks callbacks;
+    callbacks.repaintOnly = [&]() { paintDirty++; };
+    resetDomDirtyCoalesce();
+    engine.setDocument(dom, [&]() { layoutDirty++; }, "", callbacks);
+    bool ok = engine.runScript(
+        "var el = document.getElementById('box');\n"
+        "el.style.color = 'red';\n",
+        "dom-paint-only-dirty");
+    if (!ok) return "script failed\n";
+    resetDomDirtyCoalesce();
+    ok = engine.runScript(
+        "var el = document.getElementById('box');\n"
+        "el.style.width = '20px';\n",
+        "dom-layout-dirty");
+    if (!ok) return "script failed\n";
+    return "layout=" + std::to_string(layoutDirty)
+        + " paint=" + std::to_string(paintDirty) + "\n";
+}
+
 static std::string RunDomSelectorCompatibilitySnapshot() {
     JsEngine engine;
     auto dom = ParseHtml(
@@ -331,6 +355,24 @@ static std::string RunFetchPromiseShapeSnapshot() {
     return body ? body->attr("data-result") + "\n" : "missing body\n";
 }
 
+static std::string RunScriptBudgetProfileSnapshot() {
+    JsEngine engine;
+    JsScriptBudget budget;
+    budget.maxScriptBytes = 32;
+    engine.setScriptBudget(budget);
+    bool small = engine.runScript("globalThis.__small = 1;", "small.js");
+    bool large = engine.runScript(std::string(64, ' ') + "globalThis.__large = 1;", "large.js");
+    const auto stats = engine.scriptStats();
+    std::string actual;
+    actual += std::string("small=") + (small ? "yes" : "no") + "\n";
+    actual += std::string("large=") + (large ? "yes" : "no") + "\n";
+    actual += "attempted=" + std::to_string(stats.scriptsAttempted) + "\n";
+    actual += "executed=" + std::to_string(stats.scriptsExecuted) + "\n";
+    actual += "skipped=" + std::to_string(stats.scriptsSkippedByBudget) + "\n";
+    actual += std::string("timed=") + (stats.parseMs >= 0.0 && stats.compileRunMs >= 0.0 ? "yes" : "no") + "\n";
+    return actual;
+}
+
 TestResult RunJsTests() {
     TestResult result;
 
@@ -381,6 +423,12 @@ TestResult RunJsTests() {
         result);
 
     ExpectEqual(
+        "js/engine/script-budget-profile-counters",
+        RunScriptBudgetProfileSnapshot(),
+        "small=yes\nlarge=no\nattempted=2\nexecuted=1\nskipped=1\ntimed=yes\n",
+        result);
+
+    ExpectEqual(
         "js/dom/property-writes-reflect-to-node",
         RunDomReflectionSnapshot(),
         "class=b c style=display: none text=Bye\n",
@@ -402,6 +450,12 @@ TestResult RunJsTests() {
         "js/dom/direct-property-writes-coalesce-repaint",
         RunDomDirtyCoalescingSnapshot(),
         "1\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/paint-only-style-skips-layout-dirty",
+        RunDomPaintOnlyDirtySnapshot(),
+        "layout=1 paint=1\n",
         result);
 
     ExpectJsResult(

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cwchar>
 #include <cctype>
+#include <chrono>
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -499,6 +500,8 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                       bool repaintChrome)
 {
     if (!EnsureTarget()) return 0.f;
+    m_lastTimings = RendererTimings{};
+    auto paintStart = std::chrono::steady_clock::now();
 
     for (auto* b : m_tempBrushes) if (b) b->Release();
     m_tempBrushes.clear();
@@ -513,6 +516,7 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
     CssColor   pageBg;
     if (doc) {
         if (m_styleDocKey != doc.get() || m_styleBaseUrlKey != baseUrl) {
+            auto styleStart = std::chrono::steady_clock::now();
             m_cachedSheet  = CollectStylesheet(doc.get());
             m_cachedPageBg = FindBodyBgColor(doc.get(), m_cachedSheet);
             m_cachedUsesHoverStyles = StylesheetUsesHover(m_cachedSheet);
@@ -520,6 +524,9 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
             m_styleBaseUrlKey = baseUrl;
             if (!m_cachedSheet.fontFaces.empty())
                 WebFontLoader::instance().loadFonts(m_cachedSheet, baseUrl, [this]() { InvalidateLayout(); });
+            auto styleEnd = std::chrono::steady_clock::now();
+            m_lastTimings.styleMs =
+                std::chrono::duration<double, std::milli>(styleEnd - styleStart).count();
         }
         sheet = &m_cachedSheet;
         pageBg = m_cachedPageBg;
@@ -587,7 +594,9 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                       && m_layoutHKey    == m_height
                       && m_layoutZoomKey == effZoom
                       && !hoverMayAffectStyle;
+            m_lastTimings.layoutReused = reuse;
             if (!reuse) {
+                auto layoutStart = std::chrono::steady_clock::now();
                 LayoutInput in;
                 in.document  = doc.get();
                 in.sheet     = sheet;
@@ -603,6 +612,9 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
                 m_layoutZoomKey= effZoom;
                 m_anchorY.clear();
                 if (m_layoutRoot) CollectAnchors(*m_layoutRoot);
+                auto layoutEnd = std::chrono::steady_clock::now();
+                m_lastTimings.layoutMs =
+                    std::chrono::duration<double, std::milli>(layoutEnd - layoutStart).count();
             }
             if (hoverMayAffectStyle && m_layoutRoot && !oldStyles.empty()) {
                 std::set<const Node*> transitioned;
@@ -637,11 +649,17 @@ float Renderer::Paint(const std::shared_ptr<Node>& doc,
         }
 
         HRESULT hr = m_rt->EndDraw();
+        auto paintEnd = std::chrono::steady_clock::now();
+        m_lastTimings.paintMs =
+            std::chrono::duration<double, std::milli>(paintEnd - paintStart).count();
         if (hr == D2DERR_RECREATE_TARGET) ReleaseTarget();
         return docH;
     }
 
     m_rt->EndDraw();
+    auto paintEnd = std::chrono::steady_clock::now();
+    m_lastTimings.paintMs =
+        std::chrono::duration<double, std::milli>(paintEnd - paintStart).count();
     return 0.f;
 }
 

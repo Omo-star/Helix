@@ -569,7 +569,6 @@ JsValue VM::runFrame(CallFrame& frame) {
         case OP_SET_PROP: {
             JsValue obj = REG(ins.a), key = REG(ins.b), val = REG(ins.c);
             setProp(obj, key, val);
-            if (obj.isObject() && obj.asObject()->domNode) notifyDomDirtyCoalesced(*this);
             break;
         }
         case OP_GET_PROP_S: {
@@ -586,9 +585,6 @@ JsValue VM::runFrame(CallFrame& frame) {
             if (frame.pc < (int)code.size()) {
                 const Instruction& next = code[frame.pc++];
                 setProp(REG(ins.a), k, REG(next.a));
-                if (REG(ins.a).isObject() && REG(ins.a).asObject()->domNode) {
-                    notifyDomDirtyCoalesced(*this);
-                }
             }
             break;
         }

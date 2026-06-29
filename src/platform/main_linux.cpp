@@ -11,6 +11,7 @@
 #include "platform/chrome_theme.h"
 #include "platform/box_painter.h"
 #include "platform/plat_text_measure.h"
+#include "network/resource_cache.h"
 #include "render/svg.h"
 #include "third_party/stb_image.h"
 #include <set>
@@ -208,7 +209,7 @@ static void FetchImageAsync(const std::string& url) {
     g_loadingImages.insert(url);
     std::thread([url]() {
         g_imageFetchGate.acquire();
-        auto res = FetchUrl(url);
+        auto res = FetchResourceCached(url, 32 * 1024 * 1024, ResourceKind::Image);
         g_imageFetchGate.release();
         auto* msg = new LinuxImageMsg{ url, {} };
         if (res.success && !res.body.empty())
@@ -299,7 +300,7 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
 // Platform-owned fetch: called by g_chrome.onNavigateRequested.
 static void platformFetch(int tabIdx, const std::string& url) {
     std::thread([tabIdx, url]() {
-        auto res = FetchUrl(url);
+        auto res = FetchResourceCached(url, 12 * 1024 * 1024, ResourceKind::Document);
         auto* page = new Page();
         page->url = url;
         if (res.success && !res.body.empty()) {

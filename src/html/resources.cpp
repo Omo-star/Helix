@@ -1,6 +1,6 @@
 #include "html/resources.h"
 
-#include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/text_decode.h"
 #include "network/url.h"
 
@@ -42,7 +42,7 @@ void LoadExternalScriptSources(const std::shared_ptr<Node>& document,
         if (node->type == NodeType::Element && node->tagName == "script"
             && IsClassicJavaScript(*node) && !node->attr("src").empty()) {
             const std::string url = ResolveUrlAgainstBase(node->attr("src"), pageUrl);
-            const FetchResult response = FetchUrl(url);
+            const FetchResult response = FetchResourceCached(url, kMaxScriptBytes, ResourceKind::Script);
             if (response.success && !response.body.empty()
                 && response.body.size() <= kMaxScriptBytes
                 && loadedBytes + response.body.size() <= kMaxTotalBytes) {

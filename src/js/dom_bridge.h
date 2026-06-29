@@ -10,6 +10,7 @@ struct DomBridgeCallbacks {
     std::function<void(float x, float y)> scrollTo;
     std::function<void(float dx, float dy)> scrollBy;
     std::function<void(Node* target)> scrollIntoView;
+    std::function<void()> repaintOnly;
 };
 
 // Wraps a Node* into a JsObject (Element/Text/Document).
@@ -30,7 +31,7 @@ void dispatchDomEvent(VM& vm, Node* target, const std::string& eventName);
 void dispatchWindowEvent(VM& vm, const std::string& eventName, JsValue eventValue = JsValue::undefined());
 
 // Mark DOM state dirty and coalesce repaint callbacks until the timer tick.
-void notifyDomDirtyCoalesced(VM& vm);
+void notifyDomDirtyCoalesced(VM& vm, bool affectsLayout = true);
 
 // Reset DOM dirty coalescing — call from platform timer tick.
 void resetDomDirtyCoalesce();

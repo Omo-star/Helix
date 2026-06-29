@@ -3,9 +3,8 @@
 #include <shlobj.h>
 #pragma comment(lib, "comctl32.lib")
 
-#include "network/fetcher.h"
+#include "network/resource_cache.h"
 #include "network/url.h"
-#include "network/fetcher.h"
 #include "html/parser.h"
 #include "html/resources.h"
 #include "network/text_decode.h"
@@ -329,7 +328,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
         auto* p = new Page;
         p->url   = url;
         try {
-            auto res = FetchUrl(fetchUrl);
+            auto res = FetchResourceCached(fetchUrl, 12 * 1024 * 1024, ResourceKind::Document);
             if (res.success) {
                 p->dom = ParseHtml(DecodeTextToUtf8(res.body, res.contentType, true));
                 if (!res.finalUrl.empty() && res.finalUrl != url)
@@ -727,17 +726,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         g_renderer.SetImageRequestCallback([hwnd](std::string url) {
-            std::thread([hwnd, url]() {
-                g_imageFetchGate.acquire();
-                auto res = FetchUrl(url, 32 * 1024 * 1024);
-                g_imageFetchGate.release();
+            FetchResourceAsync(url, 32 * 1024 * 1024, ResourceKind::Image,
+                [hwnd, url](FetchResult res) {
                 auto* m = new ImageMsg;
                 m->url = url;
                 if (res.success && !res.body.empty()) {
                     m->bytes = std::vector<uint8_t>(res.body.begin(), res.body.end());
                 }
                 PostMessageW(hwnd, WM_IMAGE_READY, 0, (LPARAM)m);
-            }).detach();
+            });
+            SetTimer(hwnd, 1, 16, NULL);
         });
 
         g_renderer.Init(hwnd);
@@ -876,6 +874,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateContent();
                 };
                 DomBridgeCallbacks callbacks;
+                callbacks.repaintOnly = []() {
+                    InvalidateContent();
+                };
                 callbacks.navigate = [idx](const std::string& url, bool replace) {
                     if (idx != g_activeTab) return;
                     Navigate(g_activeTab, url, !replace);
@@ -945,7 +946,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         std::string filename = "inline";
                         if (!srcUrl.empty() && !skip) {
                             std::string resolved = ResolveUrlAgainstBase(srcUrl, g_tabs[idx].page->url);
-                            auto res = FetchUrl(resolved, 256 * 1024);
+                            auto res = FetchResourceCached(resolved, 256 * 1024, ResourceKind::Script);
                             if (res.success && !res.body.empty()) {
                                 source = res.body;
                                 filename = resolved;
@@ -1215,6 +1216,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         resetDomDirtyCoalesce(); // Allow next batch of DOM mutations to trigger repaint.
+        if (DrainResourceCompletions() > 0) {
+            InvalidateContent();
+        }
         try {
             g_js.runMacrotasks();
         } catch (...) {
@@ -1226,7 +1230,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             GetClientRect(hwnd, &rc);
             rc.bottom = TOP_INSET;
             InvalidateRect(hwnd, &rc, FALSE);
-        } else if (!g_js.hasPendingMacrotasks()) {
+        } else if (!g_js.hasPendingMacrotasks() && !HasPendingResourceCompletions()) {
             KillTimer(hwnd, 1);
         }
         return 0;

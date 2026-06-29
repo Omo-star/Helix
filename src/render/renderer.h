@@ -23,6 +23,13 @@ struct TabEntry {
     float        loadingProgress = 0.f;
 };
 
+struct RendererTimings {
+    double styleMs = 0.0;
+    double layoutMs = 0.0;
+    double paintMs = 0.0;
+    bool layoutReused = false;
+};
+
 class Renderer : public ITextMeasure {
 public:
     ~Renderer();
@@ -62,6 +69,7 @@ public:
     const LayoutBox* GetLayoutRoot() const { return m_layoutRoot.get(); }
     void InvalidateLayout();
     bool UsesHoverStyles() const;
+    RendererTimings LastTimings() const { return m_lastTimings; }
 
     void SetSearchQuery(const std::wstring& q) { m_searchQuery = q; }
     const std::wstring& GetSearchQuery() const { return m_searchQuery; }
@@ -149,6 +157,7 @@ private:
     const Node* m_layoutDocKey  = nullptr;
     UINT  m_layoutWKey = 0, m_layoutHKey = 0;
     float m_layoutZoomKey = 0.f;
+    RendererTimings m_lastTimings;
 
     ID2D1SolidColorBrush* TempBrush(D2D1_COLOR_F color);
     std::string  ResolveUrl(const std::string& href, const std::string& base);
