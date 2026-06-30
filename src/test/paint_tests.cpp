@@ -375,6 +375,21 @@ TestResult RunPaintTests() {
     }
 
     {
+        auto root = FindRepoRoot();
+        std::string painter = ReadTextFile(root / "src/render/box_paint.cpp");
+        std::string sharedPainter = ReadTextFile(root / "src/platform/box_painter.h");
+        const bool blockLinksHit =
+            painter.find("!box.href.empty()") != std::string::npos
+            && painter.find("m_hits.push_back({ hx, hy, hw, hh, box.href });") != std::string::npos
+            && sharedPainter.find("!box.href.empty()") != std::string::npos
+            && sharedPainter.find("ps.hits->push_back({ hx, hy, hw, hh, box.href });") != std::string::npos;
+        ExpectEqual("paint/block-link-boxes-register-hit-regions",
+            blockLinksHit ? "clickable\n" : "text-only\n",
+            "clickable\n",
+            result);
+    }
+
+    {
         const std::string svg =
             "<svg width=\"12\" height=\"10\" viewBox=\"0 0 12 10\">"
             "<rect x=\"1\" y=\"2\" width=\"4\" height=\"3\" fill=\"red\"/>"

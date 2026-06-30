@@ -550,6 +550,17 @@ void Renderer::PaintBox(const LayoutBox& box, float scrollY, float topInset, boo
     bool hidden = (box.style.visibilitySet && box.style.visibilityHidden)
                 || (box.style.opacitySet && box.style.opacity < 0.01f);
 
+    if (!hidden && !box.href.empty()
+        && box.kind != BoxKind::Text && box.kind != BoxKind::Inline
+        && box.kind != BoxKind::Break) {
+        float hx = box.x;
+        float hy = box.y - effScroll + topInset;
+        float hw = box.borderBoxW();
+        float hh = box.borderBoxH();
+        if (hw > 0 && hh > 0)
+            m_hits.push_back({ hx, hy, hw, hh, box.href });
+    }
+
     // CSS transform: apply a D2D matrix around this box's center.
     D2D1_MATRIX_3X2_F oldTransform;
     bool hasTransform = box.style.transformSet && m_rt &&

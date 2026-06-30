@@ -352,6 +352,18 @@ inline void PaintBoxTree(PaintState& ps, const LayoutBox& box) {
     bool hidden = (box.style.visibilitySet && box.style.visibilityHidden)
                || (box.style.opacitySet && box.style.opacity < 0.01f);
 
+    if (!hidden && ps.hits && !box.href.empty()
+        && box.kind != BoxKind::Text && box.kind != BoxKind::Inline
+        && box.kind != BoxKind::Break) {
+        float hitScrollY = box.style.positionMode == 3 ? 0.f : ps.scrollY;
+        float hx = box.x;
+        float hy = box.y - hitScrollY + ps.topInset;
+        float hw = box.borderBoxW();
+        float hh = box.borderBoxH();
+        if (hw > 0 && hh > 0)
+            ps.hits->push_back({ hx, hy, hw, hh, box.href });
+    }
+
     // CSS transform: for the cross-platform painter we apply translate by
     // temporarily shifting scrollY/topInset (which offsets all paint coords).
     // Scale and rotate would need native matrix support per-renderer.
