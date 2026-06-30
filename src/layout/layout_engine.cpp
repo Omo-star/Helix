@@ -634,6 +634,7 @@ struct Engine {
     // Resolve a used width value from a CSS length/percentage against `cbW`.
     // Returns -1 for auto.
     float usedWidth(const ComputedStyle& s, float cbW) {
+        if (s.widthCalcPercent >= 0) return std::max(0.f, cbW * (s.widthCalcPercent / 100.f) + px(s.widthCalcOffset));
         if (s.widthPercent >= 0) return cbW * (s.widthPercent / 100.f);
         if (s.width >= 0) return px(s.width);
         return -1;  // auto
@@ -674,6 +675,7 @@ struct Engine {
         DepthScope _d; if (g_depth > kMaxDepth) return 0;
         const ComputedStyle& s = box.style;
         if (s.width >= 0) return px(s.width);
+        if (s.widthCalcPercent >= 0) return 0;  // % component handled by caller
         if (s.widthPercent >= 0) return 0;  // % handled by caller
 
         if (box.kind == BoxKind::Text) {
@@ -1178,14 +1180,20 @@ void Engine::layoutFlex(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
                 ? px(child.style.marginLeft) : 0.f;
             const float oldWidth = child.style.width;
             const float oldPercent = child.style.widthPercent;
+            const float oldCalcPercent = child.style.widthCalcPercent;
+            const float oldCalcOffset = child.style.widthCalcOffset;
             child.style.width = w / std::max(0.01f, Z);
             child.style.widthPercent = -1;
+            child.style.widthCalcPercent = -1;
+            child.style.widthCalcOffset = 0;
             child.y = cursorY;
             std::vector<LayoutBox*> positioned;
             layoutBox(child, cursorX - marginLeft, box.contentW, cbHeight, positioned, nullptr);
             for (auto* p : positioned) positionedOut.push_back(p);
             child.style.width = oldWidth;
             child.style.widthPercent = oldPercent;
+            child.style.widthCalcPercent = oldCalcPercent;
+            child.style.widthCalcOffset = oldCalcOffset;
             cursorX += child.marginBoxW() + gap;
             line.maxH = std::max(line.maxH, child.marginBoxH());
         }
@@ -1341,12 +1349,16 @@ void Engine::layoutGrid(LayoutBox& box, std::vector<LayoutBox*>& positionedOut) 
         for (int ci = c; ci < std::min(c + cell.colSpan, (int)cols); ++ci) cellW += colW[ci];
         if (cell.colSpan > 1) cellW += gap * (cell.colSpan - 1);
         float savedW = item.style.width, savedPct = item.style.widthPercent;
+        float savedCalcPct = item.style.widthCalcPercent, savedCalcOffset = item.style.widthCalcOffset;
         item.style.width = std::max(0.f, cellW - hExtra(item.style)) / std::max(0.01f, Z);
         item.style.widthPercent = -1;
+        item.style.widthCalcPercent = -1;
+        item.style.widthCalcOffset = 0;
         std::vector<LayoutBox*> pos;
         layoutBox(item, colX[c], cellW, usedHeight(box.style, -1.f), pos, nullptr);
         for (auto* p : pos) positionedOut.push_back(p);
         item.style.width = savedW; item.style.widthPercent = savedPct;
+        item.style.widthCalcPercent = savedCalcPct; item.style.widthCalcOffset = savedCalcOffset;
         int r = cell.row;
         if (r < (int)rowH.size()) rowH[r] = std::max(rowH[r], item.marginBoxH());
     }
@@ -1443,7 +1455,7 @@ void Engine::layoutTable(LayoutBox& box) {
 
     // Auto width → shrink to content (capped at available). Explicit/percent
     // width → fill the resolved width, distributing slack across columns.
-    bool autoWidth = !(box.style.width >= 0 || box.style.widthPercent >= 0);
+    bool autoWidth = !(box.style.width >= 0 || box.style.widthPercent >= 0 || box.style.widthCalcPercent >= 0);
     float targetW = autoWidth ? std::min(natural, avail) : std::max(avail, 0.f);
     if (natural > 0.01f && std::abs(targetW - natural) > 0.5f) {
         float scale = (targetW - spacing * (cols + 1)) /
@@ -1469,12 +1481,18 @@ void Engine::layoutTable(LayoutBox& box) {
             // Pin the cell to its shared column width (override auto) so columns align.
             float savedW = cell->style.width;
             float savedPct = cell->style.widthPercent;
+            float savedCalcPct = cell->style.widthCalcPercent;
+            float savedCalcOffset = cell->style.widthCalcOffset;
             cell->style.width = std::max(0.f, cw - hExtra(cell->style)) / std::max(0.01f, Z);
             cell->style.widthPercent = -1;
+            cell->style.widthCalcPercent = -1;
+            cell->style.widthCalcOffset = 0;
             std::vector<LayoutBox*> pos;
             layoutBox(*cell, cx, cw, -1.f, pos, nullptr);
             cell->style.width = savedW;
             cell->style.widthPercent = savedPct;
+            cell->style.widthCalcPercent = savedCalcPct;
+            cell->style.widthCalcOffset = savedCalcOffset;
             rowH = std::max(rowH, cell->borderBoxH());
             ci += span;
         }
@@ -1550,7 +1568,7 @@ static void CollectInline(Engine& E, LayoutBox* box, std::vector<InlineItem>& it
         // Atomic: lay it out to learn its size. Use the parent's content width
         // as the containing block when the element has a percentage width
         // (otherwise shrink-to-fit with a huge available width).
-        float cbW = (box->style.widthPercent >= 0 || box->style.maxWidthPercent >= 0)
+        float cbW = (box->style.widthPercent >= 0 || box->style.widthCalcPercent >= 0 || box->style.maxWidthPercent >= 0)
                   ? parentW : 1e6f;
         std::vector<LayoutBox*> pos;
         E.layoutBox(*box, 0, cbW, -1, pos, nullptr);

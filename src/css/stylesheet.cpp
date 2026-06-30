@@ -162,6 +162,52 @@ static std::string stripQuotes(std::string s) {
     return s;
 }
 
+static bool ParseCalcPercentOffset(const std::string& raw, float& percent, float& offset) {
+    std::string s = sTrim(raw);
+    std::string low = sLower(s);
+    if (low.rfind("calc(", 0) != 0 || low.back() != ')') return false;
+    std::string inner = s.substr(5, s.size() - 6);
+    size_t opPos = std::string::npos;
+    char op = 0;
+    int depth = 0;
+    for (size_t i = 1; i < inner.size(); ++i) {
+        char c = inner[i];
+        if (c == '(') ++depth;
+        else if (c == ')' && depth > 0) --depth;
+        else if (depth == 0 && (c == '+' || c == '-')) {
+            opPos = i;
+            op = c;
+            break;
+        }
+    }
+    if (opPos == std::string::npos) return false;
+
+    std::string left = sTrim(inner.substr(0, opPos));
+    std::string right = sTrim(inner.substr(opPos + 1));
+    float lp = ParsePercentage(left);
+    float rp = ParsePercentage(right);
+    auto parseLengthTerm = [](const std::string& v, float& out) {
+        if (ParsePercentage(v) >= 0) return false;
+        float f = ParseLength(v);
+        if (f <= -1e5f) return false;
+        out = f;
+        return true;
+    };
+
+    float ll = 0, rl = 0;
+    if (lp >= 0 && parseLengthTerm(right, rl)) {
+        percent = lp;
+        offset = (op == '-') ? -rl : rl;
+        return true;
+    }
+    if (rp >= 0 && parseLengthTerm(left, ll)) {
+        percent = (op == '-') ? -rp : rp;
+        offset = ll;
+        return true;
+    }
+    return false;
+}
+
 static bool IsUnitlessNumber(const std::string& raw) {
     std::string s = sTrim(raw);
     if (s.empty()) return false;
@@ -1193,9 +1239,27 @@ static void ApplyDeclaration(const std::string& prop,
         else if (v == "max-content") out.widthKeyword = 2;
         else if (v == "fit-content") out.widthKeyword = 3;
         else {
+            float calcPct = -1.f, calcOffset = 0.f;
             float pct = ParsePercentage(val);
-            if (pct >= 0) out.widthPercent = pct;
-            else { float f = ParseLength(val); if (f >= 0) out.width = f; }
+            if (ParseCalcPercentOffset(val, calcPct, calcOffset)) {
+                out.widthCalcPercent = calcPct;
+                out.widthCalcOffset = calcOffset;
+                out.width = -1;
+                out.widthPercent = -1;
+            } else if (pct >= 0) {
+                out.widthPercent = pct;
+                out.width = -1;
+                out.widthCalcPercent = -1;
+                out.widthCalcOffset = 0;
+            } else {
+                float f = ParseLength(val);
+                if (f >= 0) {
+                    out.width = f;
+                    out.widthPercent = -1;
+                    out.widthCalcPercent = -1;
+                    out.widthCalcOffset = 0;
+                }
+            }
         }
     } else if (prop == "height") {
         std::string v = sLower(sTrim(val));
@@ -2513,6 +2577,7 @@ std::string SerializeComputedStyle(const ComputedStyle& style) {
     if (style.textAlignSet)      out << "textAlign="    << style.textAlign    << " ";
     if (style.width        >= 0) out << "width="        << style.width        << " ";
     if (style.widthPercent >= 0) out << "widthPercent=" << style.widthPercent << " ";
+    if (style.widthCalcPercent >= 0) out << "widthCalc=" << style.widthCalcPercent << "%+" << style.widthCalcOffset << " ";
     if (style.height       >= 0) out << "height="       << style.height       << " ";
     if (style.maxWidth     >= 0) out << "maxWidth="     << style.maxWidth     << " ";
     if (style.minHeight    >= 0) out << "minHeight="    << style.minHeight    << " ";

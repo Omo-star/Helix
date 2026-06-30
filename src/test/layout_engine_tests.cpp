@@ -460,12 +460,12 @@ TestResult RunLayoutEngineTests() {
             "<input type=\"hidden\" id=\"go-hidden\" value=\"Go\" name=\"go\">"
             "</form></body></html>");
         auto hsheet = ParseStylesheet(
-            "#search { width:540px; margin:0; }"
-            "#search-input { display:inline-block; position:relative; width:73%; vertical-align:top; }"
+            "#search { width:320px; margin:0; }"
+            "#search-input { display:inline-block; position:relative; width:calc(100% - 56px); vertical-align:top; }"
             "#q { width:100%; height:44px; }"
             "#picker { position:absolute; top:0; right:0; width:120px; height:44px; }"
-            "#go { display:inline-block; width:23%; min-height:44px; vertical-align:top; }"
-            ".sprite { display:inline-block; width:22px; height:22px; text-indent:-9999px; }");
+            "#go { display:inline-block; width:56px; min-height:44px; padding:0; vertical-align:top; }"
+            ".sprite { display:inline-block; width:22px; height:22px; overflow:hidden; text-indent:-9999px; }");
         LayoutInput hin; hin.document = hdom.get(); hin.sheet = &hsheet;
         hin.measure = &measure; hin.viewportW = 800.f; hin.viewportH = 400.f;
         auto hl = LayoutDocument(hin);
@@ -479,6 +479,7 @@ TestResult RunLayoutEngineTests() {
         bool rowOk = !family && !hiddenGo && wrap && q && picker && go
             && go->kind != BoxKind::Replaced
             && icon && icon->kind == BoxKind::InlineBlock
+            && std::abs(wrap->contentW - 264.f) < 1.f
             && std::abs(wrap->x - q->x) < 0.5f
             && picker->x >= q->x + q->borderBoxW() - picker->borderBoxW() - 1.f
             && go->x >= wrap->x + wrap->borderBoxW() - 1.f

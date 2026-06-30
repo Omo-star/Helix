@@ -284,6 +284,15 @@ TestResult RunCssTests() {
     }
 
     {
+        auto cs = ParseInlineStyle("width: calc(100% - 56px)");
+        char buf[96];
+        snprintf(buf, sizeof buf, "calc=%g,%g width=%g pct=%g\n",
+            cs.widthCalcPercent, cs.widthCalcOffset, cs.width, cs.widthPercent);
+        ExpectEqual("css/values/calc-percent-minus-length-width",
+            std::string(buf), "calc=100,-56 width=-1 pct=-1\n", result);
+    }
+
+    {
         auto dom = ParseHtml("<html><body><h2 id=\"top\">Hello World!</h2></body></html>");
         auto sheet = ParseStylesheet("#top { font: 2em/24px sans-serif; }");
         auto* node = FindElementById(dom.get(), "top");

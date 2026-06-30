@@ -110,6 +110,8 @@ struct ComputedStyle {
     // Sizing
     float    width        = -1;
     float    widthPercent = -1;
+    float    widthCalcPercent = -1;
+    float    widthCalcOffset  = 0;
     float    height       = -1;
     float    heightPercent = -1;
     float    maxWidth     = -1;
@@ -301,8 +303,9 @@ struct ComputedStyle {
         if (child.transitionSet) { out.transitionDuration = child.transitionDuration; out.transitionProperty = child.transitionProperty; out.transitionSet = true; }
         if (child.outlineSet) { out.outlineWidth = child.outlineWidth; out.outlineColor = child.outlineColor; out.outlineSet = true; }
         if (child.textShadowSet) { out.textShadowX = child.textShadowX; out.textShadowY = child.textShadowY; out.textShadowBlur = child.textShadowBlur; out.textShadowColor = child.textShadowColor; out.textShadowSet = true; }
-        if (child.width        >= 0) out.width     = child.width;
-        if (child.widthPercent >= 0) out.widthPercent = child.widthPercent;
+        if (child.width        >= 0) { out.width = child.width; out.widthPercent = -1; out.widthCalcPercent = -1; out.widthCalcOffset = 0; }
+        if (child.widthPercent >= 0) { out.widthPercent = child.widthPercent; out.width = -1; out.widthCalcPercent = -1; out.widthCalcOffset = 0; }
+        if (child.widthCalcPercent >= 0) { out.widthCalcPercent = child.widthCalcPercent; out.widthCalcOffset = child.widthCalcOffset; out.width = -1; out.widthPercent = -1; }
         if (child.height       >= 0) out.height    = child.height;
         if (child.heightPercent >= 0) out.heightPercent = child.heightPercent;
         if (child.maxWidth     >= 0) out.maxWidth  = child.maxWidth;
