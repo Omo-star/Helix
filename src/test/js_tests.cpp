@@ -589,6 +589,67 @@ static std::string RunDocumentElementShortcutsSnapshot() {
     return body ? body->attr("data-result") + "\n" : "missing body\n";
 }
 
+static std::string RunDomModernMutationConveniencesSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><ul id=\"list\"><li id=\"a\">A</li><li id=\"b\">B</li></ul><p id=\"tail\">T</p></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var list = document.getElementById('list');\n"
+        "var a = document.getElementById('a');\n"
+        "var b = document.getElementById('b');\n"
+        "var tail = document.getElementById('tail');\n"
+        "list.prepend('zero');\n"
+        "var c = document.createElement('li'); c.id = 'c'; c.textContent = 'C';\n"
+        "list.append(c, 'done');\n"
+        "a.before(document.createElement('hr'));\n"
+        "b.after('after-b');\n"
+        "tail.replaceWith(document.createElement('section'), 'end');\n"
+        "var names = [];\n"
+        "for (var i = 0; i < list.childNodes.length; i++) names.push(list.childNodes[i].nodeName + ':' + list.childNodes[i].textContent);\n"
+        "document.body.setAttribute('data-result', names.join('|') + ';tail=' + (document.getElementById('tail') ? 'yes' : 'no') + ';section=' + document.getElementsByTagName('section').length);\n",
+        "modern-mutation-conveniences");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDomAttributeNsSiblingSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><div id=\"box\" class=\"card\"></div><span id=\"next\"></span></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var box = document.getElementById('box');\n"
+        "document.body.setAttribute('data-stage', 'box');\n"
+        "box.setAttribute('data-a', '1');\n"
+        "document.body.setAttribute('data-stage', 'set');\n"
+        "var first = box.toggleAttribute('hidden');\n"
+        "document.body.setAttribute('data-stage', 'toggle1');\n"
+        "var second = box.toggleAttribute('hidden', false);\n"
+        "document.body.setAttribute('data-stage', 'toggle2');\n"
+        "var third = box.toggleAttribute('hidden', true);\n"
+        "document.body.setAttribute('data-stage', 'toggle3');\n"
+        "var names = box.getAttributeNames();\n"
+        "document.body.setAttribute('data-stage', 'names');\n"
+        "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');\n"
+        "document.body.setAttribute('data-stage', 'create-ns');\n"
+        "svg.setAttribute('viewBox', '0 0 1 1');\n"
+        "box.after(svg);\n"
+        "document.body.setAttribute('data-stage', 'after');\n"
+        "document.body.setAttribute('data-stage', 'join');\n"
+        "var joined = names.join(',');\n"
+        "document.body.setAttribute('data-stage', 'svg-attr');\n"
+        "var vb = svg.getAttribute('viewBox');\n"
+        "document.body.setAttribute('data-stage', 'siblings');\n"
+        "var ns = box.nextSibling.tagName;\n"
+        "var ps = document.getElementById('next').previousSibling.tagName;\n"
+        "document.body.setAttribute('data-stage', 'result');\n"
+        "document.body.setAttribute('data-result', first + '/' + second + '/' + third + '|' + joined + '|' + svg.tagName + ':' + svg.namespaceURI + ':' + vb + '|' + ns + '|' + ps);\n",
+        "attribute-ns-sibling");
+    Node* body = FindByTag(dom.get(), "body");
+    if (!ok) return std::string("script failed:") + (body ? body->attr("data-stage") : "no-body") + "\n";
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
 static std::string RunStorageLengthSnapshot() {
     JsEngine engine;
     auto dom = ParseHtml("<html><body></body></html>");
@@ -791,6 +852,18 @@ TestResult RunJsTests() {
         "js/dom/document-element-shortcuts-are-wrappers",
         RunDocumentElementShortcutsSnapshot(),
         "html|head|body\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/modern-mutation-conveniences",
+        RunDomModernMutationConveniencesSnapshot(),
+        "#text:zero|hr:|li:A|li:B|#text:after-b|li:C|#text:done;tail=no;section=1\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/attribute-ns-and-sibling-compat",
+        RunDomAttributeNsSiblingSnapshot(),
+        "true/false/true|class,data-a,hidden,id|svg:http://www.w3.org/2000/svg:0 0 1 1|svg|svg\n",
         result);
 
     ExpectEqual(

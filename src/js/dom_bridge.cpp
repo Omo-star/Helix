@@ -24,6 +24,16 @@ static void addNative(VM& vm, JsObject* obj, const std::string& name, NativeFn f
     obj->setProp(name, JsValue::object(fnObj));
 }
 
+static JsObject* newArrayWithPrototype(VM& vm) {
+    auto* arr = vm.gc().newArray();
+    JsValue arrayCtor = vm.getGlobal("Array");
+    if (arrayCtor.isObject()) {
+        JsValue proto = arrayCtor.asObject()->getProp("prototype");
+        if (proto.isObject()) arr->proto = proto.asObject();
+    }
+    return arr;
+}
+
 static bool eventFlag(JsObject* ev, const std::string& name) {
     if (!ev) return false;
     return ev->getProp(name).toBool();
@@ -67,6 +77,7 @@ static std::unordered_map<Node*, std::shared_ptr<Node>> g_nodeStore;
 static std::unordered_map<Node*, JsObject*> g_wrapperStore;
 static std::unordered_set<JsObject*> g_datasetObjects;
 static std::unordered_set<JsObject*> g_readyWrappers;
+static const char* kNamespaceAttr = "__helix_namespaceURI";
 
 // Event listeners: node -> [(eventName, callbackFn), ...]
 struct EventListener { std::string event; JsValue fn; };
@@ -165,6 +176,17 @@ static bool nodeContains(Node* root, Node* needle) {
     for (Node* cur = needle; cur; cur = cur->parent)
         if (cur == root) return true;
     return false;
+}
+
+static Node* siblingNode(Node* node, int direction) {
+    if (!node || !node->parent) return nullptr;
+    const auto& siblings = node->parent->children;
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i].get() != node) continue;
+        if (direction < 0) return i > 0 ? siblings[i - 1].get() : nullptr;
+        return i + 1 < siblings.size() ? siblings[i + 1].get() : nullptr;
+    }
+    return nullptr;
 }
 
 static Node* findFirstTag(Node* root, const std::string& tag) {
@@ -523,7 +545,10 @@ static std::string outerHTML(VM& vm, Node* n) {
         return r;
     }
     std::string html = "<" + n->tagName;
-    for (auto& [k, v] : n->attrs) html += " " + k + "=\"" + v + "\"";
+    for (auto& [k, v] : n->attrs) {
+        if (k == kNamespaceAttr) continue;
+        html += " " + k + "=\"" + v + "\"";
+    }
     html += ">" + innerHTML(vm, n) + "</" + n->tagName + ">";
     return html;
 }
@@ -532,6 +557,40 @@ static std::string innerHTML(VM& vm, Node* n) {
     std::string s;
     for (auto& c : n->children) s += outerHTML(vm, c.get());
     return s;
+}
+
+static std::shared_ptr<Node> nodeFromDomArg(JsValue value) {
+    if (Node* existing = unwrapNode(value)) {
+        auto shared = getShared(existing);
+        if (shared) return shared;
+    }
+    auto text = Node::makeText(value.toString());
+    registerSubtree(text);
+    return text;
+}
+
+static std::vector<std::shared_ptr<Node>> nodesFromDomArgs(const std::vector<JsValue>& args) {
+    std::vector<std::shared_ptr<Node>> out;
+    out.reserve(args.size());
+    for (const auto& arg : args) {
+        auto node = nodeFromDomArg(arg);
+        if (node) out.push_back(node);
+    }
+    return out;
+}
+
+static void insertDomArgs(Node* parent, Node* before, const std::vector<JsValue>& args) {
+    if (!parent) return;
+    for (auto& node : nodesFromDomArgs(args))
+        insertSharedChild(parent, node, before);
+}
+
+static void replaceNodeWithArgs(Node* node, const std::vector<JsValue>& args) {
+    if (!node || !node->parent) return;
+    Node* parent = node->parent;
+    Node* before = siblingNode(node, 1);
+    detachFromParent(node);
+    insertDomArgs(parent, before, args);
 }
 
 static bool isIdentChar(char c) {
@@ -905,6 +964,9 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         obj->setProp("nodeName", vm.str(node->tagName));
         obj->setProp("tagName",  vm.str(node->tagName));
         obj->setProp("localName",vm.str(node->tagName));
+        obj->setProp("namespaceURI", node->attrs.count(kNamespaceAttr)
+            ? vm.str(node->attr(kNamespaceAttr))
+            : JsValue::null());
     }
 
     // ── id/className ──
@@ -987,6 +1049,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* n = unwrapNode(thisVal);
         if (!n) return JsValue::null();
         std::string k = args.empty() ? "" : args[0].toString();
+        if (k == kNamespaceAttr) return JsValue::null();
         auto it = n->attrs.find(k);
         return it != n->attrs.end() ? vm.str(it->second) : JsValue::null();
     });
@@ -1007,6 +1070,27 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* n = unwrapNode(thisVal);
         if (!n || args.empty()) return JsValue::boolean(false);
         return JsValue::boolean(n->attrs.count(args[0].toString()) > 0);
+    });
+    addNativeM("toggleAttribute", NATIVE("toggleAttribute") {
+        Node* n = unwrapNode(thisVal);
+        if (!n || args.empty()) return JsValue::boolean(false);
+        std::string name = ARG_STR(0);
+        bool has = n->attrs.count(name) > 0;
+        bool want = args.size() > 1 ? ARG(1).toBool() : !has;
+        if (want) n->attrs[name] = "";
+        else n->attrs.erase(name);
+        markDomDirty(vm, n, "attributes");
+        return JsValue::boolean(want);
+    });
+    addNativeM("getAttributeNames", NATIVE("getAttributeNames") {
+        Node* n = unwrapNode(thisVal);
+        auto* names = newArrayWithPrototype(vm);
+        if (!n) return JsValue::object(names);
+        for (const auto& [k, _] : n->attrs) {
+            if (k == kNamespaceAttr) continue;
+            names->arrayPush(vm.str(k));
+        }
+        return JsValue::object(names);
     });
 
     // classList — back-pointer to the owner node lets the methods mutate the
@@ -1096,8 +1180,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
 
     // children / childNodes
     if (materializeRelations) {
-        auto* children  = vm.gc().newArray();
-        auto* childNodes = vm.gc().newArray();
+        auto* children  = newArrayWithPrototype(vm);
+        auto* childNodes = newArrayWithPrototype(vm);
         for (auto& c : node->children) {
             JsValue wrapped = wrapNodeInternal(vm, c, false);
             childNodes->arrayPush(wrapped);
@@ -1107,8 +1191,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         obj->setProp("childNodes", JsValue::object(childNodes));
         obj->setProp("childElementCount", JsValue::integer((int32_t)children->arrayLength()));
     } else {
-        obj->setProp("children", JsValue::object(vm.gc().newArray()));
-        obj->setProp("childNodes", JsValue::object(vm.gc().newArray()));
+        obj->setProp("children", JsValue::object(newArrayWithPrototype(vm)));
+        obj->setProp("childNodes", JsValue::object(newArrayWithPrototype(vm)));
         obj->setProp("childElementCount", JsValue::integer(0));
     }
 
@@ -1145,6 +1229,12 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     // Sibling traversal
     if (raw && raw->parent) {
         const auto& siblings = raw->parent->children;
+        Node* prevNode = siblingNode(raw, -1);
+        Node* nextNode = siblingNode(raw, 1);
+        auto prevShared = getShared(prevNode);
+        auto nextShared = getShared(nextNode);
+        obj->setProp("previousSibling", prevShared ? wrapNodeInternal(vm, prevShared, false) : JsValue::null());
+        obj->setProp("nextSibling",     nextShared ? wrapNodeInternal(vm, nextShared, false) : JsValue::null());
         // nextElementSibling / previousElementSibling
         bool foundSelf = false;
         std::shared_ptr<Node> prevElem, nextElem;
@@ -1161,6 +1251,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         obj->setProp("nextElementSibling",     nextElem ? wrapNodeInternal(vm, nextElem, false) : JsValue::null());
         obj->setProp("previousElementSibling", prevElem ? wrapNodeInternal(vm, prevElem, false) : JsValue::null());
     } else {
+        obj->setProp("nextSibling",          JsValue::null());
+        obj->setProp("previousSibling",      JsValue::null());
         obj->setProp("nextElementSibling",     JsValue::null());
         obj->setProp("previousElementSibling", JsValue::null());
     }
@@ -1222,6 +1314,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* child = unwrapNode(ARG(0));
         if (!child) return ARG(0);
         auto& ch = n->children;
+        child->parent = nullptr;
         ch.erase(std::remove_if(ch.begin(), ch.end(), [&](auto& c){ return c.get()==child; }), ch.end());
         markDomDirty(vm, n, "childList");
         return ARG(0);
@@ -1243,6 +1336,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* newNode = unwrapNode(ARG(0)), *oldNode = unwrapNode(ARG(1));
         if (!newNode || !oldNode) return ARG(0);
         auto newShared = getShared(newNode);
+        if (!newShared) return ARG(0);
         auto it = std::find_if(n->children.begin(), n->children.end(),
             [&](const std::shared_ptr<Node>& c) { return c.get() == oldNode; });
         if (it != n->children.end()) {
@@ -1260,6 +1354,44 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         auto clone = cloneDomNode(n, !args.empty() && ARG(0).toBool());
         return wrapNode(vm, clone);
     });
+    addNativeM("append", NATIVE("append") {
+        Node* n = unwrapNode(thisVal);
+        insertDomArgs(n, nullptr, args);
+        markDomDirty(vm, n, "childList");
+        return JsValue::undefined();
+    });
+    addNativeM("prepend", NATIVE("prepend") {
+        Node* n = unwrapNode(thisVal);
+        Node* before = (n && !n->children.empty()) ? n->children.front().get() : nullptr;
+        insertDomArgs(n, before, args);
+        markDomDirty(vm, n, "childList");
+        return JsValue::undefined();
+    });
+    addNativeM("before", NATIVE("before") {
+        Node* n = unwrapNode(thisVal);
+        if (n && n->parent) {
+            Node* parent = n->parent;
+            insertDomArgs(parent, n, args);
+            markDomDirty(vm, parent, "childList");
+        }
+        return JsValue::undefined();
+    });
+    addNativeM("after", NATIVE("after") {
+        Node* n = unwrapNode(thisVal);
+        if (n && n->parent) {
+            Node* parent = n->parent;
+            insertDomArgs(parent, siblingNode(n, 1), args);
+            markDomDirty(vm, parent, "childList");
+        }
+        return JsValue::undefined();
+    });
+    addNativeM("replaceWith", NATIVE("replaceWith") {
+        Node* n = unwrapNode(thisVal);
+        Node* parent = n ? n->parent : nullptr;
+        replaceNodeWithArgs(n, args);
+        markDomDirty(vm, parent, "childList");
+        return JsValue::undefined();
+    });
 
     // querySelector / querySelectorAll (simplified: id/class/tag only)
     addNativeM("querySelector", NATIVE("querySelector") {
@@ -1270,7 +1402,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     });
     addNativeM("querySelectorAll", NATIVE("querySelectorAll") {
         Node* n = unwrapNode(thisVal);
-        auto* arr = vm.gc().newArray();
+        auto* arr = newArrayWithPrototype(vm);
         if (!n || args.empty()) return JsValue::object(arr);
         for (auto& found : domQueryAll(n, args[0].toString())) arr->arrayPush(wrapNode(vm, found));
         return JsValue::object(arr);
@@ -1283,20 +1415,26 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     });
     addNativeM("getElementsByClassName", NATIVE("getElementsByClassName") {
         Node* n = unwrapNode(thisVal);
-        auto* arr = vm.gc().newArray();
+        auto* arr = newArrayWithPrototype(vm);
         if (!n || args.empty()) return JsValue::object(arr);
         for (auto& found : domQueryAll(n, "." + args[0].toString())) arr->arrayPush(wrapNode(vm, found));
         return JsValue::object(arr);
     });
     addNativeM("getElementsByTagName", NATIVE("getElementsByTagName") {
         Node* n = unwrapNode(thisVal);
-        auto* arr = vm.gc().newArray();
+        auto* arr = newArrayWithPrototype(vm);
         if (!n || args.empty()) return JsValue::object(arr);
         for (auto& found : domQueryAll(n, args[0].toString())) arr->arrayPush(wrapNode(vm, found));
         return JsValue::object(arr);
     });
     addNativeM("createElement", NATIVE("createElement") {
         auto newNode = Node::makeElement(ARG_STR(0));
+        g_nodeStore[newNode.get()] = newNode;
+        return wrapNode(vm, newNode);
+    });
+    addNativeM("createElementNS", NATIVE("createElementNS") {
+        auto newNode = Node::makeElement(ARG_STR(1));
+        newNode->attrs[kNamespaceAttr] = ARG_STR(0);
         g_nodeStore[newNode.get()] = newNode;
         return wrapNode(vm, newNode);
     });
@@ -1941,6 +2079,65 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         if (key == "value")     { out = vmPtr->str(n->attr("value")); return true; }
         if (key == "checked")   { out = JsValue::boolean(hasAttr(n, "checked")); return true; }
         if (key == "disabled")  { out = JsValue::boolean(hasAttr(n, "disabled")); return true; }
+        if (key == "namespaceURI") {
+            auto it = n->attrs.find(kNamespaceAttr);
+            out = it == n->attrs.end() ? JsValue::null() : vmPtr->str(it->second);
+            return true;
+        }
+        if (key == "children" || key == "childNodes") {
+        auto* arr = newArrayWithPrototype(*vmPtr);
+            for (auto& c : n->children) {
+                if (key == "children" && c->type != NodeType::Element) continue;
+                arr->arrayPush(wrapNodeInternal(*vmPtr, c, false));
+            }
+            out = JsValue::object(arr);
+            return true;
+        }
+        if (key == "childElementCount") {
+            int32_t count = 0;
+            for (const auto& c : n->children)
+                if (c && c->type == NodeType::Element) ++count;
+            out = JsValue::integer(count);
+            return true;
+        }
+        if (key == "firstChild" || key == "lastChild") {
+            if (n->children.empty()) out = JsValue::null();
+            else out = wrapNodeInternal(*vmPtr, key == "firstChild" ? n->children.front() : n->children.back(), false);
+            return true;
+        }
+        if (key == "firstElementChild" || key == "lastElementChild") {
+            std::shared_ptr<Node> found;
+            if (key == "firstElementChild") {
+                for (auto& c : n->children) {
+                    if (c && c->type == NodeType::Element) { found = c; break; }
+                }
+            } else {
+                for (auto it = n->children.rbegin(); it != n->children.rend(); ++it) {
+                    if (*it && (*it)->type == NodeType::Element) { found = *it; break; }
+                }
+            }
+            out = found ? wrapNodeInternal(*vmPtr, found, false) : JsValue::null();
+            return true;
+        }
+        if (key == "nextSibling" || key == "previousSibling"
+            || key == "nextElementSibling" || key == "previousElementSibling") {
+            bool wantNext = key == "nextSibling" || key == "nextElementSibling";
+            bool wantElement = key == "nextElementSibling" || key == "previousElementSibling";
+            Node* found = nullptr;
+            for (Node* cur = siblingNode(n, wantNext ? 1 : -1); cur; cur = siblingNode(cur, wantNext ? 1 : -1)) {
+                if (!wantElement || cur->type == NodeType::Element) { found = cur; break; }
+            }
+            auto shared = getShared(found);
+            out = shared ? wrapNodeInternal(*vmPtr, shared, false) : JsValue::null();
+            return true;
+        }
+        if (key == "parentNode" || key == "parentElement") {
+            Node* parent = n->parent;
+            if (key == "parentElement" && parent && parent->type != NodeType::Element) parent = nullptr;
+            auto shared = getShared(parent);
+            out = shared ? wrapNodeInternal(*vmPtr, shared, false) : JsValue::null();
+            return true;
+        }
         return false;
     };
 
