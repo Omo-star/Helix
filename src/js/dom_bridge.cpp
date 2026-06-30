@@ -11,6 +11,7 @@
 #include <sstream>
 #include <chrono>
 #include <cstdio>
+#include <unordered_set>
 
 #define NATIVE(name) [](VM& vm, JsValue thisVal, std::vector<JsValue> args) -> JsValue
 #define ARG(i) (args.size() > (size_t)(i) ? args[i] : JsValue::undefined())
@@ -64,6 +65,7 @@ static bool classHas(const std::vector<std::string>& toks, const std::string& t)
 
 static std::unordered_map<Node*, std::shared_ptr<Node>> g_nodeStore;
 static std::unordered_map<Node*, JsObject*> g_wrapperStore;
+static std::unordered_set<JsObject*> g_datasetObjects;
 
 // Event listeners: node -> [(eventName, callbackFn), ...]
 struct EventListener { std::string event; JsValue fn; };
@@ -439,6 +441,19 @@ static std::string stripQuotes(std::string s) {
         return s.substr(1, s.size() - 2);
     }
     return s;
+}
+
+static std::string datasetAttrName(const std::string& key) {
+    std::string out = "data-";
+    for (char c : key) {
+        if (c >= 'A' && c <= 'Z') {
+            out += '-';
+            out += (char)(c - 'A' + 'a');
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 static std::vector<std::string> splitSelectorTopLevel(const std::string& input, char delimiter) {
@@ -890,6 +905,11 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     {
         auto* cl = vm.gc().newObject(ObjKind::Plain);
         cl->domNode = raw;  // owner element, so unwrapNode(thisVal) resolves it
+        auto syncClassListLength = [](JsObject* list, Node* n) {
+            if (list && n)
+                list->setProp("length", JsValue::integer((int32_t)classTokens(n->attr("class")).size()));
+        };
+        syncClassListLength(cl, raw);
         addNative(vm, cl, "add", NATIVE("classList_add") {
             Node* n = unwrapNode(thisVal);
             if (!n) return JsValue::undefined();
@@ -897,6 +917,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             for (auto& a : args) { std::string t = a.toString();
                 if (!t.empty() && !classHas(toks, t)) toks.push_back(t); }
             n->attrs["class"] = classJoin(toks);
+            if (thisVal.isObject())
+                thisVal.asObject()->setProp("length", JsValue::integer((int32_t)toks.size()));
             markDomDirty(vm, n, "attributes");
             return JsValue::undefined();
         });
@@ -907,6 +929,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             for (auto& a : args) { std::string t = a.toString();
                 toks.erase(std::remove(toks.begin(), toks.end(), t), toks.end()); }
             n->attrs["class"] = classJoin(toks);
+            if (thisVal.isObject())
+                thisVal.asObject()->setProp("length", JsValue::integer((int32_t)toks.size()));
             markDomDirty(vm, n, "attributes");
             return JsValue::undefined();
         });
@@ -920,13 +944,43 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             if (want && !has) toks.push_back(t);
             else if (!want && has) toks.erase(std::remove(toks.begin(), toks.end(), t), toks.end());
             n->attrs["class"] = classJoin(toks);
+            if (thisVal.isObject())
+                thisVal.asObject()->setProp("length", JsValue::integer((int32_t)toks.size()));
             markDomDirty(vm, n, "attributes");
             return JsValue::boolean(want);
+        });
+        addNative(vm, cl, "replace", NATIVE("classList_replace") {
+            Node* n = unwrapNode(thisVal);
+            if (!n || args.size() < 2) return JsValue::boolean(false);
+            std::string oldToken = args[0].toString();
+            std::string newToken = args[1].toString();
+            auto toks = classTokens(n->attr("class"));
+            auto it = std::find(toks.begin(), toks.end(), oldToken);
+            if (it == toks.end() || newToken.empty()) return JsValue::boolean(false);
+            if (!classHas(toks, newToken)) *it = newToken;
+            else toks.erase(it);
+            n->attrs["class"] = classJoin(toks);
+            if (thisVal.isObject())
+                thisVal.asObject()->setProp("length", JsValue::integer((int32_t)toks.size()));
+            markDomDirty(vm, n, "attributes");
+            return JsValue::boolean(true);
+        });
+        addNative(vm, cl, "item", NATIVE("classList_item") {
+            Node* n = unwrapNode(thisVal);
+            if (!n || args.empty()) return JsValue::null();
+            auto toks = classTokens(n->attr("class"));
+            int index = ARG_INT(0);
+            if (index < 0 || index >= static_cast<int>(toks.size())) return JsValue::null();
+            return vm.str(toks[(size_t)index]);
         });
         addNative(vm, cl, "contains", NATIVE("classList_contains") {
             Node* n = unwrapNode(thisVal);
             if (!n || args.empty()) return JsValue::boolean(false);
             return JsValue::boolean(classHas(classTokens(n->attr("class")), args[0].toString()));
+        });
+        addNative(vm, cl, "toString", NATIVE("classList_toString") {
+            Node* n = unwrapNode(thisVal);
+            return vm.str(n ? n->attr("class") : "");
         });
         obj->setProp("classList", JsValue::object(cl));
     }
@@ -1005,6 +1059,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     // dataset — proxy for data-* attributes.
     {
         auto* ds = vm.gc().newObject(ObjKind::Plain);
+        ds->domNode = raw;
+        g_datasetObjects.insert(ds);
         if (raw) {
             for (auto& [k, v] : raw->attrs) {
                 if (k.rfind("data-", 0) == 0) {
@@ -1252,7 +1308,11 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         }
         return JsValue::undefined();
     });
-    addNativeM("click",  NATIVE("click")  { return JsValue::undefined(); });
+    addNativeM("click",  NATIVE("click")  {
+        Node* n = unwrapNode(thisVal);
+        if (n) activateDomElement(vm, n);
+        return JsValue::undefined();
+    });
     addNativeM("remove", NATIVE("remove") {
         Node* n = unwrapNode(thisVal);
         if (!n || !n->parent) return JsValue::undefined();
@@ -1601,6 +1661,10 @@ static JsValue makeURLSearchParams(VM& vm, const std::string& query, std::functi
 
 static JsValue makeStorageObject(VM& vm, std::shared_ptr<std::map<std::string, std::string>> storage) {
     auto* obj = vm.gc().newObject(ObjKind::Plain);
+    auto syncLength = [storage](JsObject* target) {
+        if (target)
+            target->setProp("length", JsValue::integer(static_cast<int32_t>(storage->size())));
+    };
     addNative(vm, obj, "getItem", [storage](VM& vm, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
         std::string key = args.empty() ? "" : args[0].toString();
         auto it = storage->find(key);
@@ -1611,21 +1675,28 @@ static JsValue makeStorageObject(VM& vm, std::shared_ptr<std::map<std::string, s
         }
         return JsValue::null();
     });
-    addNative(vm, obj, "setItem", [storage](VM& vm, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
+    addNative(vm, obj, "setItem", [storage, syncLength](VM& vm, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
         std::string key = args.empty() ? "" : args[0].toString();
         std::string value = args.size() > 1 ? args[1].toString() : "";
         (*storage)[key] = value;
-        if (thisVal.isObject()) thisVal.asObject()->setProp(key, vm.str(value));
+        if (thisVal.isObject()) {
+            thisVal.asObject()->setProp(key, vm.str(value));
+            syncLength(thisVal.asObject());
+        }
         return JsValue::undefined();
     });
-    addNative(vm, obj, "removeItem", [storage](VM&, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
+    addNative(vm, obj, "removeItem", [storage, syncLength](VM&, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
         std::string key = args.empty() ? "" : args[0].toString();
         storage->erase(key);
-        if (thisVal.isObject()) thisVal.asObject()->deleteProp(key);
+        if (thisVal.isObject()) {
+            thisVal.asObject()->deleteProp(key);
+            syncLength(thisVal.asObject());
+        }
         return JsValue::undefined();
     });
-    addNative(vm, obj, "clear", [storage](VM&, JsValue, std::vector<JsValue>) -> JsValue {
+    addNative(vm, obj, "clear", [storage, syncLength](VM&, JsValue thisVal, std::vector<JsValue>) -> JsValue {
         storage->clear();
+        if (thisVal.isObject()) syncLength(thisVal.asObject());
         return JsValue::undefined();
     });
     addNative(vm, obj, "key", [storage](VM& vm, JsValue, std::vector<JsValue> args) -> JsValue {
@@ -1673,15 +1744,25 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     g_windowScrollY = 0.f;
 
     // Reflect live JS property writes onto the backing DOM node.
-    vm.onDomPropSet = [vmPtr = &vm](JsObject* wrapper, const std::string& key, JsValue val) {
+    vm.onDomPropSet = [vmPtr = &vm, pageUrl](JsObject* wrapper, const std::string& key, JsValue val) {
         Node* n = static_cast<Node*>(wrapper->domNode);
         if (!n) return;
         // A Plain object carrying a domNode is the style object (reflect CSS) or
         // classList (mutated via its own methods, so ignore stray writes here).
         if (wrapper->kind != ObjKind::DomWrapper) {
+            if (g_datasetObjects.find(wrapper) != g_datasetObjects.end()) {
+                n->attrs[datasetAttrName(key)] = val.toString();
+                markDomDirty(*vmPtr, n, "attributes");
+                return;
+            }
             if (wrapper->hasOwn("toggle")) return;   // classList, not a style obj
             rebuildStyleAttr(n, wrapper);
             markDomDirty(*vmPtr, n, "style:" + key);
+            return;
+        }
+        if (key == "cookie" && n->type == NodeType::Document) {
+            CookieJar::instance().setFromJS(val.toString(), pageUrl);
+            wrapper->setProp("cookie", vmPtr->str(CookieJar::instance().documentCookies(pageUrl)));
             return;
         }
         if (key == "className" || key == "class") n->attrs["class"] = val.toString();
@@ -1707,10 +1788,14 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     // Symmetric live getter: keep className/id/value reads in sync with the node
     // after classList/setAttribute mutations (a stale snapshot otherwise clobbers
     // on read-modify-write, e.g. el.className += ' x').
-    vm.onDomPropGet = [vmPtr = &vm](JsObject* wrapper, const std::string& key, JsValue& out) -> bool {
+    vm.onDomPropGet = [vmPtr = &vm, pageUrl](JsObject* wrapper, const std::string& key, JsValue& out) -> bool {
         if (wrapper->kind != ObjKind::DomWrapper) return false;
         Node* n = static_cast<Node*>(wrapper->domNode);
         if (!n) return false;
+        if (key == "cookie" && n->type == NodeType::Document) {
+            out = vmPtr->str(CookieJar::instance().documentCookies(pageUrl));
+            return true;
+        }
         if (key == "className") { out = vmPtr->str(n->attr("class")); return true; }
         if (key == "id")        { out = vmPtr->str(n->attr("id"));    return true; }
         if (key == "value")     { out = vmPtr->str(n->attr("value")); return true; }
@@ -1723,6 +1808,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     for (auto& r : g_wrapperRoots) vm.gc().removeRoot(r.get());
     g_wrapperRoots.clear();
     g_wrapperStore.clear();
+    g_datasetObjects.clear();
     g_eventListeners.clear();
     g_windowEventListeners.clear();
     for (auto& r : g_observerRoots) vm.gc().removeRoot(r.get());
@@ -1975,9 +2061,61 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
             if (maxH >= 0) matches = matches && 800.f <= maxH;
             mql->setProp("matches", JsValue::boolean(matches));
             mql->setProp("media", vm.str(ARG_STR(0)));
-            addNative(vm, mql, "addEventListener", NATIVE("mql_ael") { return JsValue::undefined(); });
-            addNative(vm, mql, "removeEventListener", NATIVE("mql_rel") { return JsValue::undefined(); });
-            addNative(vm, mql, "addListener", NATIVE("mql_al") { return JsValue::undefined(); });
+            auto listeners = std::make_shared<std::vector<EventListener>>();
+            addNative(vm, mql, "addEventListener", [listeners](VM&, JsValue, std::vector<JsValue> args) -> JsValue {
+                if (args.size() >= 2 && args[1].isCallable())
+                    listeners->push_back({ args[0].toString(), args[1] });
+                return JsValue::undefined();
+            });
+            addNative(vm, mql, "removeEventListener", [listeners](VM&, JsValue, std::vector<JsValue> args) -> JsValue {
+                if (args.size() < 2) return JsValue::undefined();
+                std::string eventName = args[0].toString();
+                JsValue fn = args[1];
+                auto it = std::find_if(listeners->begin(), listeners->end(),
+                    [&](const EventListener& listener) {
+                        return listener.event == eventName && listener.fn.strictEq(fn);
+                    });
+                if (it != listeners->end()) listeners->erase(it);
+                return JsValue::undefined();
+            });
+            addNative(vm, mql, "addListener", [listeners](VM&, JsValue, std::vector<JsValue> args) -> JsValue {
+                if (!args.empty() && args[0].isCallable())
+                    listeners->push_back({ "change", args[0] });
+                return JsValue::undefined();
+            });
+            addNative(vm, mql, "removeListener", [listeners](VM&, JsValue, std::vector<JsValue> args) -> JsValue {
+                if (args.empty()) return JsValue::undefined();
+                JsValue fn = args[0];
+                auto it = std::find_if(listeners->begin(), listeners->end(),
+                    [&](const EventListener& listener) {
+                        return listener.event == "change" && listener.fn.strictEq(fn);
+                    });
+                if (it != listeners->end()) listeners->erase(it);
+                return JsValue::undefined();
+            });
+            addNative(vm, mql, "dispatchEvent", [listeners, mql](VM& vm, JsValue thisVal, std::vector<JsValue> args) -> JsValue {
+                if (args.empty() || !args[0].isObject()) return JsValue::boolean(true);
+                JsObject* ev = args[0].asObject();
+                std::string type = ev->getProp("type").toString();
+                if (type.empty()) type = "change";
+                ev->setProp("target", JsValue::object(mql));
+                ev->setProp("currentTarget", JsValue::object(mql));
+                ev->setProp("matches", mql->getProp("matches"));
+                ev->setProp("media", mql->getProp("media"));
+                installEventMethods(vm, ev);
+                JsValue propertyHandler = mql->getProp("on" + type);
+                if (propertyHandler.isCallable()) {
+                    try { vm.call(propertyHandler, thisVal, { args[0] }); } catch (...) {}
+                }
+                auto snapshot = *listeners;
+                for (const auto& listener : snapshot) {
+                    if (listener.event != type || !listener.fn.isCallable()) continue;
+                    try { vm.call(listener.fn, thisVal, { args[0] }); } catch (...) {}
+                    if (eventFlag(ev, "__helixStopped")) break;
+                }
+                vm.drainMicrotasks();
+                return JsValue::boolean(!eventFlag(ev, "defaultPrevented"));
+            });
             return JsValue::object(mql);
         }, "matchMedia")));
 
@@ -2264,8 +2402,8 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     makeEventCtor("SubmitEvent");
 }
 
-void dispatchDomEvent(VM& vm, Node* target, const std::string& eventName) {
-    if (!target) return;
+bool dispatchDomEvent(VM& vm, Node* target, const std::string& eventName) {
+    if (!target) return true;
     // Build a minimal event object.
     auto* ev = vm.gc().newObject(ObjKind::Plain);
     ev->setProp("type", vm.str(eventName));
@@ -2281,13 +2419,23 @@ void dispatchDomEvent(VM& vm, Node* target, const std::string& eventName) {
     // Walk from target up through ancestors (bubble phase).
     Node* cur = target;
     while (cur) {
+        auto curShared = getShared(cur);
+        JsValue thisObj = curShared ? wrapNode(vm, curShared) : JsValue::undefined();
+        JsValue propertyHandler = thisObj.isObject()
+            ? thisObj.asObject()->getProp("on" + eventName)
+            : JsValue::undefined();
+        if (propertyHandler.isCallable()) {
+            ev->setProp("currentTarget", thisObj);
+            try { vm.call(propertyHandler, thisObj, { evVal }); }
+            catch (...) {}
+            if (eventFlag(ev, "__helixStopped")) break;
+        }
         auto it = g_eventListeners.find(cur);
         if (it != g_eventListeners.end()) {
             for (auto& listener : it->second) {
                 if (listener.event == eventName) {
-                    auto curShared = getShared(cur);
-                    ev->setProp("currentTarget", curShared ? wrapNode(vm, curShared) : JsValue::null());
-                    try { vm.call(listener.fn, curShared ? wrapNode(vm, curShared) : JsValue::undefined(), { evVal }); }
+                    ev->setProp("currentTarget", thisObj);
+                    try { vm.call(listener.fn, thisObj, { evVal }); }
                     catch (...) {}
                     if (eventFlag(ev, "__helixStopped")) break;
                 }
@@ -2296,6 +2444,40 @@ void dispatchDomEvent(VM& vm, Node* target, const std::string& eventName) {
         if (eventFlag(ev, "__helixStopped") || !eventFlag(ev, "bubbles")) break;
         cur = cur->parent;
     }
+    vm.drainMicrotasks();
+    return !eventFlag(ev, "defaultPrevented");
+}
+
+static bool isCheckableInput(const Node* n) {
+    if (!n || n->tagName != "input") return false;
+    std::string type = lowerCopy(n->attr("type"));
+    return type == "checkbox" || type == "radio";
+}
+
+static void setCheckedAttr(Node* n, bool checked) {
+    if (!n) return;
+    if (checked) n->attrs["checked"] = "checked";
+    else n->attrs.erase("checked");
+}
+
+bool activateDomElement(VM& vm, Node* target) {
+    if (!target || hasAttr(target, "disabled")) return false;
+    const bool checkable = isCheckableInput(target);
+    const bool oldChecked = hasAttr(target, "checked");
+    if (checkable) {
+        setCheckedAttr(target, !oldChecked);
+        markDomDirty(vm, target, "attributes");
+    }
+
+    bool allowed = dispatchDomEvent(vm, target, "click");
+    if (checkable && !allowed) {
+        setCheckedAttr(target, oldChecked);
+        markDomDirty(vm, target, "attributes");
+    } else if (checkable) {
+        dispatchDomEvent(vm, target, "input");
+        dispatchDomEvent(vm, target, "change");
+    }
+    return allowed;
 }
 
 void dispatchWindowEvent(VM& vm, const std::string& eventName, JsValue eventValue) {

@@ -27,7 +27,9 @@ void registerDom(VM& vm, std::shared_ptr<Node> document,
 Node* unwrapNode(JsValue val);
 
 // Dispatch an event (e.g. "click") on a DOM node, calling registered listeners.
-void dispatchDomEvent(VM& vm, Node* target, const std::string& eventName);
+// Returns false when a cancelable event was prevented.
+bool dispatchDomEvent(VM& vm, Node* target, const std::string& eventName);
+bool activateDomElement(VM& vm, Node* target);
 void dispatchWindowEvent(VM& vm, const std::string& eventName, JsValue eventValue = JsValue::undefined());
 
 // Mark DOM state dirty and coalesce repaint callbacks until the timer tick.

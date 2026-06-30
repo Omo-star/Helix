@@ -106,37 +106,9 @@ void JsEngine::resetScriptStats() {
 
 void JsEngine::dispatchClick(Node* target, int x, int y) {
     auto& vm = m_impl->vm;
-
-    // Build a MouseEvent object
-    auto* ev = vm.gc().newObject(ObjKind::Plain);
-    ev->setProp("type",    vm.str("click"));
-    ev->setProp("clientX", JsValue::integer(x));
-    ev->setProp("clientY", JsValue::integer(y));
-    ev->setProp("pageX",   JsValue::integer(x));
-    ev->setProp("pageY",   JsValue::integer(y));
-    ev->setProp("bubbles", JsValue::boolean(true));
-    ev->setProp("cancelable", JsValue::boolean(true));
-    ev->setProp("defaultPrevented", JsValue::boolean(false));
-    addNative(vm, ev, "preventDefault",  NATIVE("preventDefault")  { return JsValue::undefined(); });
-    addNative(vm, ev, "stopPropagation", NATIVE("stopPropagation") { return JsValue::undefined(); });
-    JsValue evVal = JsValue::object(ev);
-
-    // Walk up from target invoking onclick handlers
-    Node* cur = target;
-    while (cur) {
-        // Check onclick attribute
-        std::string handler = cur->attr("onclick");
-        if (!handler.empty()) {
-            runScript(handler, "onclick");
-        }
-        // Check any registered event listeners stored in attrs
-        if (cur->attrs.count("__onclick__")) {
-            JsValue listeners = vm.getGlobal("__eventListeners__");
-            // Simplified — just run onclick attr
-        }
-        cur = cur->parent;
-    }
-
+    (void)x;
+    (void)y;
+    activateDomElement(vm, target);
     vm.drainMicrotasks();
 }
 

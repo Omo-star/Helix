@@ -430,6 +430,118 @@ static std::string RunDomEventCancellationSnapshot() {
     return body ? body->attr("data-result") + "\n" : "missing body\n";
 }
 
+static std::string RunDomElementClickSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml(
+        "<html><body>"
+        "<input id=\"check\" type=\"checkbox\">"
+        "<button id=\"btn\"></button>"
+        "</body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "globalThis.clickLog = 'start:';\n"
+        "var check = document.getElementById('check');\n"
+        "var btn = document.getElementById('btn');\n"
+        "check.onclick = function(e) { globalThis.clickLog += 'prop:' + check.checked + ':' + e.target.id + ';'; };\n"
+        "check.addEventListener('click', function(e) { globalThis.clickLog += 'listener:' + e.currentTarget.id + ':' + e.defaultPrevented + ';'; });\n"
+        "check.addEventListener('change', function(e) { globalThis.clickLog += 'change:' + check.checked + ';'; });\n"
+        "btn.onclick = function(e) { globalThis.clickLog += 'button:' + e.type + ';'; };\n"
+        "check.click();\n"
+        "btn.click();\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', globalThis.clickLog + 'checked=' + check.checked);\n",
+        "element-click");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDomDatasetReflectionSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><div id=\"box\" data-old-name=\"kept\"></div></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var box = document.getElementById('box');\n"
+        "box.dataset.mwState = 'open';\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', box.getAttribute('data-mw-state') + '|' + document.querySelector('[data-mw-state=\"open\"]').id + '|' + box.dataset.oldName);\n",
+        "dataset-reflection");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDomClassListCompatSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><div id=\"box\" class=\"a b\"></div></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var box = document.getElementById('box');\n"
+        "var list = box.classList;\n"
+        "var before = list.length + ':' + list.item(1);\n"
+        "var replaced = list.replace('b', 'c');\n"
+        "list.add('d');\n"
+        "list.remove('a');\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', before + '|' + replaced + '|' + box.className + '|' + list.length + '|' + list.toString());\n",
+        "class-list-compat");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunStorageLengthSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var before = sessionStorage.length;\n"
+        "sessionStorage.setItem('a', '1');\n"
+        "sessionStorage.setItem('b', '2');\n"
+        "var afterSet = sessionStorage.length + ':' + sessionStorage.key(1);\n"
+        "sessionStorage.removeItem('a');\n"
+        "var afterRemove = sessionStorage.length;\n"
+        "sessionStorage.clear();\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', before + '|' + afterSet + '|' + afterRemove + '|' + sessionStorage.length);\n",
+        "storage-length");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDocumentCookieWriteSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body></body></html>");
+    engine.setDocument(dom, []() {}, "https://example.org/wiki/Page");
+    bool ok = engine.runScript(
+        "document.cookie = 'helix_fill_a=1; Path=/';\n"
+        "document.cookie = 'helix_fill_b=2; Path=/';\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', document.cookie);\n",
+        "document-cookie-write");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunMatchMediaListenerSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var mq = matchMedia('(min-width: 1px)');\n"
+        "globalThis.mqLog = 'start:';\n"
+        "function onChange(e) { globalThis.mqLog += 'on:' + e.matches + ';'; }\n"
+        "function legacy(e) { globalThis.mqLog += 'legacy:' + e.matches + ';'; }\n"
+        "mq.addEventListener('change', onChange);\n"
+        "mq.addListener(legacy);\n"
+        "var first = mq.dispatchEvent(new Event('change'));\n"
+        "mq.removeEventListener('change', onChange);\n"
+        "mq.removeListener(legacy);\n"
+        "var second = mq.dispatchEvent(new Event('change'));\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', globalThis.mqLog + first + ':' + second);\n",
+        "match-media-listeners");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
 static std::string RunWebPlatformSurfaceSnapshot() {
     JsEngine engine;
     auto dom = ParseHtml("<html><body></body></html>");
@@ -535,6 +647,42 @@ TestResult RunJsTests() {
         "js/dom/event-cancellation-bubbling-and-targets",
         RunDomEventCancellationSnapshot(),
         "e:btn:btn/btn|result=false|default=true\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/element-click-dispatches-and-toggles",
+        RunDomElementClickSnapshot(),
+        "start:prop:true:check;listener:check:false;change:true;button:click;checked=true\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/dataset-writes-reflect-to-attributes",
+        RunDomDatasetReflectionSnapshot(),
+        "open|box|kept\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/classlist-replace-item-length",
+        RunDomClassListCompatSnapshot(),
+        "2:b|true|c d|2|c d\n",
+        result);
+
+    ExpectEqual(
+        "js/web-platform/storage-length-is-live",
+        RunStorageLengthSnapshot(),
+        "0|2:b|1|0\n",
+        result);
+
+    ExpectEqual(
+        "js/web-platform/document-cookie-writes-cookie-jar",
+        RunDocumentCookieWriteSnapshot(),
+        "helix_fill_a=1; helix_fill_b=2\n",
+        result);
+
+    ExpectEqual(
+        "js/web-platform/matchmedia-listeners-dispatch",
+        RunMatchMediaListenerSnapshot(),
+        "start:on:true;legacy:true;true:true\n",
         result);
 
     ExpectEqual(
