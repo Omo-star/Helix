@@ -350,6 +350,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
             EnableWindow(g_hwndRefr, TRUE);
             SetUrlBar(url);
             UpdateTitle();
+            g_renderer.InvalidateLayout();
             UpdateScrollbar();
             InvalidateRect(g_hwnd, NULL, FALSE);
         }
@@ -382,6 +383,7 @@ static void Navigate(int tabIdx, const std::string& rawUrl, bool pushHistory) {
             EnableWindow(g_hwndRefr, TRUE);
             SetUrlBar(url);
             UpdateTitle();
+            g_renderer.InvalidateLayout();
             UpdateScrollbar();
             InvalidateRect(g_hwnd, NULL, FALSE);
         }
@@ -954,6 +956,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EnableWindow(g_hwndRefr, TRUE);
             SetUrlBarForTab(CurTab());
             UpdateTitle();
+            g_renderer.InvalidateLayout();
             ClampScroll();
             UpdateScrollbar();
 

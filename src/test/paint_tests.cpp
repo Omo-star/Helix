@@ -89,6 +89,21 @@ TestResult RunPaintTests() {
     {
         auto root = FindRepoRoot();
         std::string mainWin = ReadTextFile(root / "src/main.cpp");
+        size_t count = 0;
+        size_t pos = 0;
+        while ((pos = mainWin.find("g_renderer.InvalidateLayout();", pos)) != std::string::npos) {
+            ++count;
+            pos += 30;
+        }
+        ExpectEqual("paint/windows-navigation-invalidates-document-style-cache",
+            count >= 3 ? "invalidates\n" : "stale-cache-risk\n",
+            "invalidates\n",
+            result);
+    }
+
+    {
+        auto root = FindRepoRoot();
+        std::string mainWin = ReadTextFile(root / "src/main.cpp");
         std::string engine = ReadTextFile(root / "src/js/engine.h");
         const bool timerSleeps =
             engine.find("hasPendingMacrotasks() const") != std::string::npos
