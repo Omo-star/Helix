@@ -487,6 +487,108 @@ static std::string RunDomClassListCompatSnapshot() {
     return body ? body->attr("data-result") + "\n" : "missing body\n";
 }
 
+static std::string RunDomFragmentCloneMutationSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml(
+        "<html><body>"
+        "<div id=\"root\"></div>"
+        "<div id=\"source\"><span class=\"label\">Source</span></div>"
+        "</body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var root = document.getElementById('root');\n"
+        "var source = document.getElementById('source');\n"
+        "var body = document.getElementsByTagName('body')[0];\n"
+        "body.setAttribute('data-stage', 'start');\n"
+        "var deep = source.cloneNode(true);\n"
+        "deep.id = 'deep';\n"
+        "body.setAttribute('data-stage', 'deep');\n"
+        "var shallow = source.cloneNode(false);\n"
+        "shallow.id = 'shallow';\n"
+        "body.setAttribute('data-stage', 'shallow');\n"
+        "var frag = document.createDocumentFragment();\n"
+        "var item = document.createElement('p');\n"
+        "item.id = 'frag-child';\n"
+        "item.textContent = 'Frag';\n"
+        "body.setAttribute('data-stage', 'made');\n"
+        "frag.appendChild(item);\n"
+        "body.setAttribute('data-stage', 'frag-append');\n"
+        "root.appendChild(frag);\n"
+        "body.setAttribute('data-stage', 'root-frag');\n"
+        "root.appendChild(deep);\n"
+        "root.appendChild(shallow);\n"
+        "body.setAttribute('data-stage', 'root-clones');\n"
+        "body.setAttribute('data-result',\n"
+        "  document.querySelector('#deep .label').textContent + '|' +\n"
+        "  (document.querySelector('#shallow .label') ? 'bad' : 'empty') + '|' +\n"
+        "  root.contains(document.getElementById('frag-child')) + '|' +\n"
+        "  body.contains(root));\n",
+        "fragment-clone-mutation");
+    Node* body = FindByTag(dom.get(), "body");
+    if (!ok) return std::string("script failed:") + (body ? body->attr("data-stage") : "no-body") + "\n";
+    Node* root = FindById(dom.get(), "root");
+    std::string direct;
+    if (root) {
+        for (const auto& child : root->children) {
+            if (!direct.empty()) direct += ",";
+            direct += child->tagName + "#" + child->attr("id");
+        }
+    }
+    return body ? body->attr("data-result") + "|direct=" + direct + "\n" : "missing body\n";
+}
+
+static std::string RunDomDispatchEventPropertyHandlerSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><div id=\"outer\"><button id=\"btn\"></button></div></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "globalThis.dispatchLog = 'start:';\n"
+        "var outer = document.getElementById('outer');\n"
+        "var btn = document.getElementById('btn');\n"
+        "btn.onclick = function(e) { globalThis.dispatchLog += 'prop:' + e.currentTarget.id + '/' + e.target.id + ';'; };\n"
+        "outer.addEventListener('click', function(e) { globalThis.dispatchLog += 'outer:' + e.defaultPrevented + ';'; });\n"
+        "var ev = new Event('click', { bubbles: true, cancelable: true });\n"
+        "var result = btn.dispatchEvent(ev);\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', globalThis.dispatchLog + result);\n",
+        "dispatch-event-property-handler");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDomFocusBlurSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><body><input id=\"search\"><button id=\"other\"></button></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "globalThis.focusLog = 'start:';\n"
+        "var search = document.getElementById('search');\n"
+        "search.onfocus = function(e) { globalThis.focusLog += 'focus:' + e.target.id + ';'; };\n"
+        "search.addEventListener('blur', function(e) { globalThis.focusLog += 'blur:' + e.target.id + ';'; });\n"
+        "search.focus();\n"
+        "var active = document.activeElement ? document.activeElement.id : 'none';\n"
+        "search.blur();\n"
+        "var after = document.activeElement ? document.activeElement.tagName : 'none';\n"
+        "document.getElementsByTagName('body')[0].setAttribute('data-result', globalThis.focusLog + active + '|' + after);\n",
+        "focus-blur");
+    if (!ok) return "script failed\n";
+    Node* body = FindByTag(dom.get(), "body");
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
+static std::string RunDocumentElementShortcutsSnapshot() {
+    JsEngine engine;
+    auto dom = ParseHtml("<html><head><title>T</title></head><body></body></html>");
+    engine.setDocument(dom, []() {});
+    bool ok = engine.runScript(
+        "var body = document.getElementsByTagName('body')[0];\n"
+        "document.body.setAttribute('data-result', document.documentElement.tagName + '|' + document.head.tagName + '|' + document.body.tagName);\n",
+        "document-element-shortcuts");
+    Node* body = FindByTag(dom.get(), "body");
+    if (!ok) return std::string("script failed:") + (body ? body->attr("data-stage") : "no-body") + "\n";
+    return body ? body->attr("data-result") + "\n" : "missing body\n";
+}
+
 static std::string RunStorageLengthSnapshot() {
     JsEngine engine;
     auto dom = ParseHtml("<html><body></body></html>");
@@ -665,6 +767,30 @@ TestResult RunJsTests() {
         "js/dom/classlist-replace-item-length",
         RunDomClassListCompatSnapshot(),
         "2:b|true|c d|2|c d\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/fragments-deep-clone-and-contains",
+        RunDomFragmentCloneMutationSnapshot(),
+        "Source|empty|true|true|direct=p#frag-child,div#deep,div#shallow\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/dispatchevent-runs-property-handlers",
+        RunDomDispatchEventPropertyHandlerSnapshot(),
+        "start:prop:btn/btn;outer:false;true\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/focus-blur-active-element",
+        RunDomFocusBlurSnapshot(),
+        "start:focus:search;blur:search;search|body\n",
+        result);
+
+    ExpectEqual(
+        "js/dom/document-element-shortcuts-are-wrappers",
+        RunDocumentElementShortcutsSnapshot(),
+        "html|head|body\n",
         result);
 
     ExpectEqual(

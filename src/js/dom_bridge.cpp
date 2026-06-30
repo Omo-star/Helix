@@ -66,6 +66,7 @@ static bool classHas(const std::vector<std::string>& toks, const std::string& t)
 static std::unordered_map<Node*, std::shared_ptr<Node>> g_nodeStore;
 static std::unordered_map<Node*, JsObject*> g_wrapperStore;
 static std::unordered_set<JsObject*> g_datasetObjects;
+static std::unordered_set<JsObject*> g_readyWrappers;
 
 // Event listeners: node -> [(eventName, callbackFn), ...]
 struct EventListener { std::string event; JsValue fn; };
@@ -91,6 +92,110 @@ static std::shared_ptr<Node> getShared(Node* raw) {
     auto it = g_nodeStore.find(raw);
     if (it != g_nodeStore.end()) return it->second;
     return nullptr;
+}
+
+static void registerSubtree(const std::shared_ptr<Node>& node) {
+    if (!node) return;
+    g_nodeStore[node.get()] = node;
+    for (auto& child : node->children)
+        registerSubtree(child);
+}
+
+static std::shared_ptr<Node> cloneDomNode(Node* source, bool deep) {
+    if (!source) return nullptr;
+    auto clone = std::make_shared<Node>();
+    clone->type = source->type;
+    clone->tagName = source->tagName;
+    clone->text = source->text;
+    clone->attrs = source->attrs;
+    if (deep) {
+        for (const auto& child : source->children) {
+            auto childClone = cloneDomNode(child.get(), true);
+            if (childClone) clone->appendChild(childClone);
+        }
+    }
+    registerSubtree(clone);
+    return clone;
+}
+
+static bool isDocumentFragment(const Node* node) {
+    return node && node->tagName == "#document-fragment";
+}
+
+static void detachFromParent(Node* child) {
+    if (!child || !child->parent) return;
+    auto& siblings = child->parent->children;
+    siblings.erase(std::remove_if(siblings.begin(), siblings.end(),
+        [&](const std::shared_ptr<Node>& node) { return node.get() == child; }),
+        siblings.end());
+    child->parent = nullptr;
+}
+
+static void insertSharedChild(Node* parent, std::shared_ptr<Node> child, Node* before = nullptr) {
+    if (!parent || !child) return;
+    auto insertOne = [&](std::shared_ptr<Node> node, Node* ref) {
+        if (!node) return;
+        detachFromParent(node.get());
+        node->parent = parent;
+        auto& children = parent->children;
+        if (!ref) {
+            children.push_back(std::move(node));
+            return;
+        }
+        auto it = std::find_if(children.begin(), children.end(),
+            [&](const std::shared_ptr<Node>& c) { return c.get() == ref; });
+        if (it != children.end()) children.insert(it, std::move(node));
+        else children.push_back(std::move(node));
+    };
+
+    if (isDocumentFragment(child.get())) {
+        std::vector<std::shared_ptr<Node>> fragmentChildren;
+        fragmentChildren.swap(child->children);
+        for (auto& fragmentChild : fragmentChildren) {
+            if (fragmentChild) fragmentChild->parent = nullptr;
+            insertOne(std::move(fragmentChild), before);
+        }
+        return;
+    }
+    insertOne(std::move(child), before);
+}
+
+static bool nodeContains(Node* root, Node* needle) {
+    if (!root || !needle) return false;
+    for (Node* cur = needle; cur; cur = cur->parent)
+        if (cur == root) return true;
+    return false;
+}
+
+static Node* findFirstTag(Node* root, const std::string& tag) {
+    if (!root) return nullptr;
+    std::vector<Node*> stack;
+    stack.push_back(root);
+    while (!stack.empty()) {
+        Node* n = stack.back();
+        stack.pop_back();
+        if (!n) continue;
+        if (n->tagName == tag) return n;
+        for (auto it = n->children.rbegin(); it != n->children.rend(); ++it)
+            stack.push_back(it->get());
+    }
+    return nullptr;
+}
+
+static Node* documentRootFor(Node* node) {
+    if (!node) return nullptr;
+    Node* root = node;
+    while (root->parent) root = root->parent;
+    return root;
+}
+
+static void setDocumentActiveElement(VM& vm, Node* node) {
+    JsValue doc = vm.getGlobal("document");
+    if (!doc.isObject()) return;
+    auto shared = getShared(node);
+    if (!shared && node)
+        shared = std::shared_ptr<Node>(node, [](Node*) {});
+    doc.asObject()->setProp("activeElement", shared ? wrapNode(vm, shared) : JsValue::null());
 }
 
 Node* unwrapNode(JsValue val) {
@@ -768,7 +873,11 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     g_nodeStore[raw] = node;
 
     auto cached = g_wrapperStore.find(raw);
-    if (cached != g_wrapperStore.end()) return JsValue::object(cached->second);
+    if (cached != g_wrapperStore.end()) {
+        if (!materializeRelations || g_readyWrappers.find(cached->second) != g_readyWrappers.end())
+            return JsValue::object(cached->second);
+        g_wrapperStore.erase(cached);
+    }
 
     auto* obj = vm.gc().newObject(ObjKind::DomWrapper);
     obj->domNode = raw;
@@ -1101,7 +1210,10 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* child = unwrapNode(ARG(0));
         if (!child) return ARG(0);
         auto childShared = getShared(child);
-        if (childShared) { n->appendChild(childShared); markDomDirty(vm, n, "childList"); }
+        if (childShared) {
+            insertSharedChild(n, childShared);
+            markDomDirty(vm, n, "childList");
+        }
         return ARG(0);
     });
     addNativeM("removeChild", NATIVE("removeChild") {
@@ -1121,12 +1233,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         if (!child) return ARG(0);
         auto childShared = getShared(child);
         if (!childShared) return ARG(0);
-        if (!ref) { n->appendChild(childShared); }
-        else {
-            auto& ch = n->children;
-            auto it = std::find_if(ch.begin(), ch.end(), [&](auto& c){ return c.get()==ref; });
-            if (it != ch.end()) ch.insert(it, childShared);
-        }
+        insertSharedChild(n, childShared, ref);
         markDomDirty(vm, n, "childList");
         return ARG(0);
     });
@@ -1136,8 +1243,13 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* newNode = unwrapNode(ARG(0)), *oldNode = unwrapNode(ARG(1));
         if (!newNode || !oldNode) return ARG(0);
         auto newShared = getShared(newNode);
-        for (auto& c : n->children) {
-            if (c.get() == oldNode) { c = newShared; break; }
+        auto it = std::find_if(n->children.begin(), n->children.end(),
+            [&](const std::shared_ptr<Node>& c) { return c.get() == oldNode; });
+        if (it != n->children.end()) {
+            Node* before = (std::next(it) != n->children.end()) ? std::next(it)->get() : nullptr;
+            oldNode->parent = nullptr;
+            n->children.erase(it);
+            insertSharedChild(n, newShared, before);
         }
         markDomDirty(vm, n, "childList");
         return ARG(1);
@@ -1145,10 +1257,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     addNativeM("cloneNode", NATIVE("cloneNode") {
         Node* n = unwrapNode(thisVal);
         if (!n) return JsValue::null();
-        auto clone = std::make_shared<Node>();
-        clone->type = n->type; clone->tagName = n->tagName;
-        clone->text = n->text; clone->attrs = n->attrs;
-        g_nodeStore[clone.get()] = clone;
+        auto clone = cloneDomNode(n, !args.empty() && ARG(0).toBool());
         return wrapNode(vm, clone);
     });
 
@@ -1239,13 +1348,22 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
         Node* cur = n;
         while (cur) {
             auto curShared = getShared(cur);
-            ev->setProp("currentTarget", curShared ? wrapNode(vm, curShared) : JsValue::null());
+            JsValue thisObj = curShared ? wrapNode(vm, curShared) : JsValue::undefined();
+            ev->setProp("currentTarget", thisObj);
+            JsValue propertyHandler = thisObj.isObject()
+                ? thisObj.asObject()->getProp("on" + type)
+                : JsValue::undefined();
+            if (propertyHandler.isCallable()) {
+                try { vm.call(propertyHandler, thisObj, { ARG(0) }); }
+                catch (...) {}
+                if (eventFlag(ev, "__helixStopped")) break;
+            }
             auto it = g_eventListeners.find(cur);
             if (it != g_eventListeners.end()) {
                 auto listeners = it->second;
                 for (const auto& listener : listeners) {
                     if (listener.event != type || !listener.fn.isCallable()) continue;
-                    try { vm.call(listener.fn, curShared ? wrapNode(vm, curShared) : JsValue::undefined(), { ARG(0) }); }
+                    try { vm.call(listener.fn, thisObj, { ARG(0) }); }
                     catch (...) {}
                     if (eventFlag(ev, "__helixStopped")) break;
                 }
@@ -1270,6 +1388,11 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
             cur = cur->parent;
         }
         return JsValue::null();
+    });
+    addNativeM("contains", NATIVE("contains") {
+        Node* n = unwrapNode(thisVal);
+        Node* other = unwrapNode(ARG(0));
+        return JsValue::boolean(nodeContains(n, other));
     });
 
     addNativeM("getBoundingClientRect", NATIVE("getBoundingClientRect") {
@@ -1297,6 +1420,8 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     addNativeM("focus",  NATIVE("focus")  {
         if (Node* n = unwrapNode(thisVal)) {
             SetCssFocusNode(n);
+            setDocumentActiveElement(vm, n);
+            dispatchDomEvent(vm, n, "focus");
             markDomDirty(vm, n, "attributes");
         }
         return JsValue::undefined();
@@ -1304,6 +1429,9 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     addNativeM("blur",   NATIVE("blur")   {
         if (Node* n = unwrapNode(thisVal)) {
             SetCssFocusNode(nullptr);
+            dispatchDomEvent(vm, n, "blur");
+            Node* body = findFirstTag(documentRootFor(n), "body");
+            setDocumentActiveElement(vm, body);
             markDomDirty(vm, n, "attributes");
         }
         return JsValue::undefined();
@@ -1332,6 +1460,7 @@ static JsValue wrapNodeInternal(VM& vm, std::shared_ptr<Node> node, bool materia
     obj->setProp("type",    vm.str(node->attr("type")));
     obj->setProp("name",    vm.str(node->attr("name")));
 
+    g_readyWrappers.insert(obj);
     vm.gc().removeRoot(&objValue);
     return objValue;
 }
@@ -1792,6 +1921,17 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         if (wrapper->kind != ObjKind::DomWrapper) return false;
         Node* n = static_cast<Node*>(wrapper->domNode);
         if (!n) return false;
+        if (n->type == NodeType::Document
+            && (key == "body" || key == "head" || key == "documentElement")) {
+            const char* tag = key == "documentElement" ? "html" : key.c_str();
+            Node* found = findFirstTag(n, tag);
+            if (!found) { out = JsValue::null(); return true; }
+            g_wrapperStore.erase(found);
+            auto shared = getShared(found);
+            if (!shared) shared = std::shared_ptr<Node>(found, [](Node*) {});
+            out = wrapNode(*vmPtr, shared);
+            return true;
+        }
         if (key == "cookie" && n->type == NodeType::Document) {
             out = vmPtr->str(CookieJar::instance().documentCookies(pageUrl));
             return true;
@@ -1808,6 +1948,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
     for (auto& r : g_wrapperRoots) vm.gc().removeRoot(r.get());
     g_wrapperRoots.clear();
     g_wrapperStore.clear();
+    g_readyWrappers.clear();
     g_datasetObjects.clear();
     g_eventListeners.clear();
     g_windowEventListeners.clear();
@@ -1848,6 +1989,7 @@ void registerDom(VM& vm, std::shared_ptr<Node> docNode,
         docVal.asObject()->setProp("referrer",        vm.str(""));
         docVal.asObject()->setProp("lastModified",    vm.str(""));
         docVal.asObject()->setProp("characterSet",    vm.str("UTF-8"));
+        docVal.asObject()->setProp("activeElement",   findFirst("body"));
     }
 
     // window globals — populate location from the page URL.
