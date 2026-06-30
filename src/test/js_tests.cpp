@@ -1104,6 +1104,32 @@ TestResult RunJsTests() {
         "number: 6\n",
         result);
 
+    ExpectJsResult(
+        "destructuring/array-rest-preserves-tail",
+        "var [first, ...rest] = [1, 2, 3, 4];\n"
+        "__result = first + ':' + rest.length + ':' + rest[0] + ':' + rest[2];\n",
+        "string: 1:3:2:4\n",
+        result);
+
+    ExpectJsResult(
+        "destructuring/object-rest-copies-remaining-props",
+        "var { a, ...rest } = { a: 1, b: 2, c: 3 };\n"
+        "__result = a + ':' + rest.b + ':' + rest.c + ':' + rest.a;\n",
+        "string: 1:2:3:undefined\n",
+        result);
+
+    ExpectJsResult(
+        "weak-collections/object-identity-keys",
+        "var a = {}, b = {};\n"
+        "var wm = new WeakMap();\n"
+        "wm.set(a, 'a');\n"
+        "wm.set(b, 'b');\n"
+        "var ws = new WeakSet();\n"
+        "ws.add(a);\n"
+        "__result = wm.get(a) + ':' + wm.get(b) + ':' + wm.has({}) + ':' + ws.has(a) + ':' + ws.has(b);\n",
+        "string: a:b:false:true:false\n",
+        result);
+
     ExpectEqual(
         "js/engine/dom-registration-does-not-recurse",
         RunEngineDomRegistrationSnapshot(),

@@ -1286,10 +1286,104 @@ static void registerMapSet(VM& vm) {
     }, "Set");
     vm.setGlobal("Set", JsValue::object(setCtor));
 
-    // WeakMap / WeakSet â€” simplified (same as Map/Set)
-    vm.setGlobal("WeakMap", vm.getGlobal("Map"));
-    vm.setGlobal("WeakSet", vm.getGlobal("Set"));
-    vm.setGlobal("WeakRef", vm.getGlobal("Map"));
+    auto* weakMapCtor = vm.gc().newNativeFunction(NATIVE("WeakMap") {
+        auto* map = vm.gc().newObject(ObjKind::Map);
+        if (ARG(0).isObject()) {
+            auto* arr = ARG(0).asObject();
+            for (uint32_t i = 0; i < arr->arrayLength(); i++) {
+                JsValue pair = arr->arrayGet(i);
+                if (!pair.isObject()) continue;
+                JsValue key = pair.asObject()->arrayGet(0);
+                if (!key.isObject()) continue;
+                JsValue value = pair.asObject()->arrayGet(1);
+                auto it = std::find_if(map->mapEntries.begin(), map->mapEntries.end(),
+                    [&](const auto& entry) { return entry.first.strictEq(key); });
+                if (it != map->mapEntries.end()) it->second = value;
+                else map->mapEntries.push_back({ key, value });
+            }
+        }
+        addNative(vm, map, "get", NATIVE("weakmap_get") {
+            if (!thisVal.isObject()) return JsValue::undefined();
+            for (auto& entry : thisVal.asObject()->mapEntries)
+                if (entry.first.strictEq(ARG(0))) return entry.second;
+            return JsValue::undefined();
+        });
+        addNative(vm, map, "set", NATIVE("weakmap_set") {
+            if (!thisVal.isObject() || !ARG(0).isObject()) return thisVal;
+            auto& entries = thisVal.asObject()->mapEntries;
+            auto it = std::find_if(entries.begin(), entries.end(),
+                [&](const auto& entry) { return entry.first.strictEq(ARG(0)); });
+            if (it != entries.end()) it->second = ARG(1);
+            else entries.push_back({ ARG(0), ARG(1) });
+            return thisVal;
+        });
+        addNative(vm, map, "has", NATIVE("weakmap_has") {
+            if (!thisVal.isObject()) return JsValue::boolean(false);
+            for (auto& entry : thisVal.asObject()->mapEntries)
+                if (entry.first.strictEq(ARG(0))) return JsValue::boolean(true);
+            return JsValue::boolean(false);
+        });
+        addNative(vm, map, "delete", NATIVE("weakmap_delete") {
+            if (!thisVal.isObject()) return JsValue::boolean(false);
+            auto& entries = thisVal.asObject()->mapEntries;
+            auto before = entries.size();
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                [&](const auto& entry) { return entry.first.strictEq(ARG(0)); }), entries.end());
+            return JsValue::boolean(entries.size() != before);
+        });
+        return JsValue::object(map);
+    }, "WeakMap");
+    vm.setGlobal("WeakMap", JsValue::object(weakMapCtor));
+
+    auto* weakSetCtor = vm.gc().newNativeFunction(NATIVE("WeakSet") {
+        auto* set = vm.gc().newObject(ObjKind::Set);
+        if (ARG(0).isObject()) {
+            auto* arr = ARG(0).asObject();
+            for (uint32_t i = 0; i < arr->arrayLength(); i++) {
+                JsValue value = arr->arrayGet(i);
+                if (!value.isObject()) continue;
+                bool exists = false;
+                for (auto& entry : set->setEntries) {
+                    if (entry.strictEq(value)) { exists = true; break; }
+                }
+                if (!exists) set->setEntries.push_back(value);
+            }
+        }
+        addNative(vm, set, "add", NATIVE("weakset_add") {
+            if (!thisVal.isObject() || !ARG(0).isObject()) return thisVal;
+            auto& entries = thisVal.asObject()->setEntries;
+            for (auto& entry : entries)
+                if (entry.strictEq(ARG(0))) return thisVal;
+            entries.push_back(ARG(0));
+            return thisVal;
+        });
+        addNative(vm, set, "has", NATIVE("weakset_has") {
+            if (!thisVal.isObject()) return JsValue::boolean(false);
+            for (auto& entry : thisVal.asObject()->setEntries)
+                if (entry.strictEq(ARG(0))) return JsValue::boolean(true);
+            return JsValue::boolean(false);
+        });
+        addNative(vm, set, "delete", NATIVE("weakset_delete") {
+            if (!thisVal.isObject()) return JsValue::boolean(false);
+            auto& entries = thisVal.asObject()->setEntries;
+            auto before = entries.size();
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                [&](const JsValue& entry) { return entry.strictEq(ARG(0)); }), entries.end());
+            return JsValue::boolean(entries.size() != before);
+        });
+        return JsValue::object(set);
+    }, "WeakSet");
+    vm.setGlobal("WeakSet", JsValue::object(weakSetCtor));
+
+    auto* weakRefCtor = vm.gc().newNativeFunction(NATIVE("WeakRef") {
+        auto* ref = vm.gc().newObject(ObjKind::Plain);
+        ref->setProp("__target__", ARG(0).isObject() ? ARG(0) : JsValue::undefined());
+        addNative(vm, ref, "deref", NATIVE("weakref_deref") {
+            return thisVal.isObject() ? thisVal.asObject()->getProp("__target__") : JsValue::undefined();
+        });
+        return JsValue::object(ref);
+    }, "WeakRef");
+    vm.setGlobal("WeakRef", JsValue::object(weakRefCtor));
 }
 
 // â”€â”€ Date â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

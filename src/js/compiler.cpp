@@ -632,8 +632,16 @@ void Compiler::emitDestructure(const Expr& pat, uint8_t src) {
             freeReg(el);
         }
         if (!ap.rest.empty()) {
-            uint8_t restArr = allocReg(); emit(OP_NEW_ARRAY, restArr); // simplified: empty
-            storeVar(ap.rest, restArr, 0); freeReg(restArr);
+            uint8_t sliceFn = allocReg();
+            uint8_t startArg = allocReg();
+            uint8_t restArr = allocReg();
+            emitGetStaticProp(sliceFn, src, "slice");
+            Instruction start; start.op = OP_LOAD_INT; start.a = startArg; start.setsbc((int16_t)ap.elements.size());
+            m_fn->code.push_back(start); m_fn->lines.push_back(0);
+            emit(OP_CALL, restArr, src, sliceFn);
+            emit(OP_NOP, 1);
+            storeVar(ap.rest, restArr, 0);
+            freeReg(restArr); freeReg(startArg); freeReg(sliceFn);
         }
     } else if (pat.is<ObjectPattern>()) {
         auto& op = pat.as<ObjectPattern>();
@@ -643,6 +651,34 @@ void Compiler::emitDestructure(const Expr& pat, uint8_t src) {
             emitGetStaticProp(propReg, src, p.key);
             if (p.value) emitStore(*p.value, propReg);
             freeReg(propReg);
+        }
+        for (auto& p : op.props) {
+            if (!p.rest || p.key.empty()) continue;
+            uint8_t objectReg = loadVar("Object", -1, 0);
+            uint8_t assignFn = allocReg();
+            emitGetStaticProp(assignFn, objectReg, "assign");
+            uint8_t restObj = allocReg();
+            uint8_t sourceArg = allocReg();
+            emit(OP_NEW_OBJECT, restObj);
+            emit(OP_MOVE, sourceArg, src);
+            uint8_t ignored = allocReg();
+            emit(OP_CALL, ignored, objectReg, assignFn);
+            emit(OP_NOP, 2);
+            freeReg(ignored);
+
+            for (auto& bound : op.props) {
+                if (bound.rest) continue;
+                uint8_t key = allocReg();
+                uint16_t ki = m_fn->addConstString(bound.key);
+                Instruction keyLoad; keyLoad.op = OP_LOAD_CONST; keyLoad.a = key; keyLoad.setbc(ki);
+                m_fn->code.push_back(keyLoad); m_fn->lines.push_back(0);
+                uint8_t deleted = allocReg();
+                emit(OP_DELETE, deleted, restObj, key);
+                freeReg(deleted); freeReg(key);
+            }
+
+            storeVar(p.key, restObj, 0);
+            freeReg(sourceArg); freeReg(restObj); freeReg(assignFn); freeReg(objectReg);
         }
     }
 }
