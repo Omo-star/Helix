@@ -655,6 +655,16 @@ struct Engine {
         if (s.minWidthPercent >= 0) return cbW * (s.minWidthPercent / 100.f);
         return -1;
     }
+    float usedMaxHeight(const ComputedStyle& s, float cbH) {
+        if (s.maxHeight >= 0) return px(s.maxHeight);
+        if (s.maxHeightPercent >= 0 && cbH >= 0) return cbH * (s.maxHeightPercent / 100.f);
+        return -1;
+    }
+    float usedMinHeight(const ComputedStyle& s, float cbH) {
+        if (s.minHeight >= 0) return px(s.minHeight);
+        if (s.minHeightPercent >= 0 && cbH >= 0) return cbH * (s.minHeightPercent / 100.f);
+        return -1;
+    }
 
     // Horizontal margin+border+padding of a box, in device px (auto margins → 0).
     float hExtra(const ComputedStyle& s) {
@@ -855,8 +865,8 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
                 h = box.contentW * (box.intrinsicH / box.intrinsicW);
             else h = box.intrinsicH > 0 ? px(box.intrinsicH) : 0;
         }
-        if (s.maxHeight >= 0) h = std::min(h, bbHeight(px(s.maxHeight)));
-        if (s.minHeight >= 0) h = std::max(h, bbHeight(px(s.minHeight)));
+        { float mh = usedMaxHeight(s, cbH); if (mh >= 0) h = std::min(h, bbHeight(mh)); }
+        { float nh = usedMinHeight(s, cbH); if (nh >= 0) h = std::max(h, bbHeight(nh)); }
         box.contentH = h;
         return;
     }
@@ -866,8 +876,8 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         layoutTable(box);
         float eh = bbHeight(usedHeight(s, cbH));
         if (eh >= 0) box.contentH = eh;
-        if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, bbHeight(px(s.maxHeight)));
-        if (s.minHeight >= 0) box.contentH = std::max(box.contentH, bbHeight(px(s.minHeight)));
+        { float mh = usedMaxHeight(s, cbH); if (mh >= 0) box.contentH = std::min(box.contentH, bbHeight(mh)); }
+        { float nh = usedMinHeight(s, cbH); if (nh >= 0) box.contentH = std::max(box.contentH, bbHeight(nh)); }
         return;
     }
 
@@ -956,8 +966,8 @@ void Engine::layoutBox(LayoutBox& box, float cbX, float cbW, float cbH,
         box.contentH = box.contentW / s.aspectRatio;
 
     // min/max height clamp on the final content height.
-    if (s.maxHeight >= 0) box.contentH = std::min(box.contentH, bbHeight(px(s.maxHeight)));
-    if (s.minHeight >= 0) box.contentH = std::max(box.contentH, bbHeight(px(s.minHeight)));
+    { float mh = usedMaxHeight(s, cbH); if (mh >= 0) box.contentH = std::min(box.contentH, bbHeight(mh)); }
+    { float nh = usedMinHeight(s, cbH); if (nh >= 0) box.contentH = std::max(box.contentH, bbHeight(nh)); }
 }
 
 // Lay out the in-flow block-level children of `box`, stacking vertically with
@@ -1784,9 +1794,16 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
         b->marginRight  = s.marginRightSet()  && !s.isMarginAuto(s.marginRight)  ? px(s.marginRight)  : 0;
 
         float bpX = b->borderLeft + b->padLeft + b->borderRight + b->padRight;
+        float bpY = b->borderTop + b->padTop + b->borderBottom + b->padBottom;
+        bool borderBox = (s.boxSizing == 1);
+        auto contentBoxHeight = [&](float h) {
+            return (borderBox && h >= 0) ? std::max(0.f, h - bpY) : h;
+        };
 
         // Resolve width.
         float w = usedWidth(s, cbW);
+        if (borderBox && w >= 0)
+            w = std::max(0.f, w - bpX);
         if (w < 0) {
             if (s.leftSet && s.rightSet) {
                 float l = s.leftPercent ? cbW*(s.left/100.f) : px(s.left);
@@ -1796,8 +1813,8 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
             else
                 w = std::min(maxContent(*b), std::max(0.f, cbW - bpX));  // shrink-to-fit
         }
-        if (s.maxWidth >= 0) w = std::min(w, px(s.maxWidth));
-        if (s.minWidth >= 0) w = std::max(w, px(s.minWidth));
+        { float mw = usedMaxWidth(s, cbW); if (mw >= 0) { if (borderBox) mw = std::max(0.f, mw - bpX); w = std::min(w, mw); } }
+        { float nw = usedMinWidth(s, cbW); if (nw >= 0) { if (borderBox) nw = std::max(0.f, nw - bpX); w = std::max(w, nw); } }
         b->contentW = w;
 
         b->x = 0; b->y = 0;  // children laid out relative to origin; translated below
@@ -1805,15 +1822,15 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
             // A positioned image: resolve height from CSS or the intrinsic
             // aspect ratio (the normal-flow replaced path in layoutBox is never
             // reached for out-of-flow boxes, so do it here too).
-            float h = usedHeight(s, cbH);
+            float h = contentBoxHeight(usedHeight(s, cbH));
             if (b->contentW <= 0 && b->intrinsicW > 0) b->contentW = px(b->intrinsicW);
             if (h < 0) {
                 if (b->intrinsicW > 0 && b->intrinsicH > 0 && b->contentW > 0)
                     h = b->contentW * (b->intrinsicH / b->intrinsicW);
                 else h = b->intrinsicH > 0 ? px(b->intrinsicH) : 0;
             }
-            if (s.maxHeight >= 0) h = std::min(h, px(s.maxHeight));
-            if (s.minHeight >= 0) h = std::max(h, px(s.minHeight));
+            { float mh = usedMaxHeight(s, cbH); if (mh >= 0) h = std::min(h, contentBoxHeight(mh)); }
+            { float nh = usedMinHeight(s, cbH); if (nh >= 0) h = std::max(h, contentBoxHeight(nh)); }
             b->contentH = h;
         } else {
             // Lay out the subtree (block or inline) to learn height.
@@ -1821,15 +1838,15 @@ void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused
             if (b->establishesInline) {
                 FloatCtx local; local.cbLeft = b->contentX(); local.cbRight = b->contentX() + b->contentW;
                 float h = layoutInline(*b, &local);
-                float eh = usedHeight(s, cbH);
+                float eh = contentBoxHeight(usedHeight(s, cbH));
                 b->contentH = eh >= 0 ? eh : h;
             } else {
                 layoutBlockChildren(*b, dummy);
-                float eh = usedHeight(s, cbH);
+                float eh = contentBoxHeight(usedHeight(s, cbH));
                 if (eh >= 0) b->contentH = eh;
             }
-            if (s.maxHeight >= 0) b->contentH = std::min(b->contentH, px(s.maxHeight));
-            if (s.minHeight >= 0) b->contentH = std::max(b->contentH, px(s.minHeight));
+            { float mh = usedMaxHeight(s, cbH); if (mh >= 0) b->contentH = std::min(b->contentH, contentBoxHeight(mh)); }
+            { float nh = usedMinHeight(s, cbH); if (nh >= 0) b->contentH = std::max(b->contentH, contentBoxHeight(nh)); }
         }
 
         // Final border-box position. Percentages resolve against the CB dimensions.

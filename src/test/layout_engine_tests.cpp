@@ -424,6 +424,34 @@ TestResult RunLayoutEngineTests() {
             result);
     }
 
+    // Absolutely positioned boxes use the same CSS box model rules as normal
+    // blocks: border-box widths include padding/border and percent max-width
+    // constraints resolve against the positioned containing block.
+    {
+        auto bdom = ParseHtml(
+            "<html><body><div id=\"host\"><div id=\"abs\"></div><div id=\"cap\"></div></div></body></html>");
+        auto bsheet = ParseStylesheet(
+            "body { margin:0; }"
+            "#host { position:relative; width:400px; height:220px; }"
+            "#abs { position:absolute; left:0; top:0; width:200px; height:80px; box-sizing:border-box; padding:20px; border:5px solid black; }"
+            "#cap { position:absolute; left:0; top:100px; width:360px; max-width:50%; min-width:25%; height:20px; }");
+        LayoutInput bin; bin.document = bdom.get(); bin.sheet = &bsheet;
+        bin.measure = &measure; bin.viewportW = 800.f; bin.viewportH = 480.f;
+        auto bl = LayoutDocument(bin);
+        auto* abs = FindEngineBoxById(bl.get(), "abs");
+        auto* cap = FindEngineBoxById(bl.get(), "cap");
+        bool ok = abs && cap
+            && std::abs(abs->borderBoxW() - 200.f) < 0.5f
+            && std::abs(abs->contentW - 150.f) < 0.5f
+            && std::abs(abs->borderBoxH() - 80.f) < 0.5f
+            && std::abs(abs->contentH - 30.f) < 0.5f
+            && std::abs(cap->contentW - 200.f) < 0.5f;
+        ExpectEqual("layout-engine/positioned-box-sizing-and-percent-max-width",
+            ok ? "sized\n" : "overflow\n",
+            "sized\n",
+            result);
+    }
+
     // Search controls need tag-specific intrinsic sizes rather than every
     // control becoming a generic 140px block.
     {
