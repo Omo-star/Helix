@@ -724,6 +724,7 @@ struct Engine {
                    bool shrinkToFit = false);
     void layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& positioned);
     void collectPositioned(LayoutBox& box, LayoutBox* nearestPositioned,
+                           LayoutBox* nearestFixedContainingBlock,
                            std::vector<std::pair<LayoutBox*, LayoutBox*>>& out);
 };
 
@@ -1760,13 +1761,21 @@ float Engine::layoutInline(LayoutBox& box, FloatCtx* fctx) {
 // positioned ancestor (the containing block), so we can lay them out after
 // normal flow has fixed everyone's geometry.
 void Engine::collectPositioned(LayoutBox& box, LayoutBox* nearestPositioned,
+                               LayoutBox* nearestFixedContainingBlock,
                                std::vector<std::pair<LayoutBox*, LayoutBox*>>& out) {
     DepthScope _d; if (g_depth > kMaxDepth) return;
-    LayoutBox* nextNearest = box.isPositioned() ? &box : nearestPositioned;
+    const bool establishesTransformContainingBlock = box.style.transformSet;
+    LayoutBox* nextNearest = (box.isPositioned() || establishesTransformContainingBlock)
+        ? &box : nearestPositioned;
+    LayoutBox* nextFixedContainingBlock = establishesTransformContainingBlock
+        ? &box : nearestFixedContainingBlock;
     for (auto& k : box.kids) {
         if (k->isOutOfFlow())
-            out.push_back({ k.get(), k->style.positionMode == 3 ? nullptr : nextNearest });
-        collectPositioned(*k, nextNearest, out);
+            out.push_back({
+                k.get(),
+                k->style.positionMode == 3 ? nextFixedContainingBlock : nextNearest
+            });
+        collectPositioned(*k, nextNearest, nextFixedContainingBlock, out);
     }
     // Atomic inline-blocks may also contain positioned descendants laid out via
     // their own subtree; collectPositioned already recurses into kids above.
@@ -1774,7 +1783,7 @@ void Engine::collectPositioned(LayoutBox& box, LayoutBox* nearestPositioned,
 
 void Engine::layoutPositioned(LayoutBox& root, std::vector<LayoutBox*>& /*unused*/) {
     std::vector<std::pair<LayoutBox*, LayoutBox*>> items;
-    collectPositioned(root, &root, items);
+    collectPositioned(root, &root, nullptr, items);
 
     for (auto& [b, cb] : items) {
         const ComputedStyle& s = b->style;

@@ -452,6 +452,29 @@ TestResult RunLayoutEngineTests() {
             result);
     }
 
+    // A transformed ancestor establishes the containing block for absolutely
+    // positioned descendants even when the ancestor itself is not positioned.
+    {
+        auto tdom = ParseHtml(
+            "<html><body><div id=\"wrap\"><div id=\"abs\"></div></div></body></html>");
+        auto tsheet = ParseStylesheet(
+            "body { margin:0; }"
+            "#wrap { transform:translateX(10px); margin-left:100px; width:300px; height:160px; padding:20px; }"
+            "#abs { position:absolute; left:25%; top:50%; width:40px; height:20px; }");
+        LayoutInput tin; tin.document = tdom.get(); tin.sheet = &tsheet;
+        tin.measure = &measure; tin.viewportW = 800.f; tin.viewportH = 480.f;
+        auto tl = LayoutDocument(tin);
+        auto* wrap = FindEngineBoxById(tl.get(), "wrap");
+        auto* abs = FindEngineBoxById(tl.get(), "abs");
+        bool ok = wrap && abs
+            && std::abs(abs->x - (wrap->contentX() + 75.f)) < 0.5f
+            && std::abs(abs->y - (wrap->contentY() + 80.f)) < 0.5f;
+        ExpectEqual("layout-engine/transform-establishes-positioned-containing-block",
+            ok ? "contained\n" : "viewport\n",
+            "contained\n",
+            result);
+    }
+
     // Search controls need tag-specific intrinsic sizes rather than every
     // control becoming a generic 140px block.
     {
